@@ -3,11 +3,7 @@ from setuptools import find_packages, setup
 setup(
     name="assisting_bounded_humans",
     packages=find_packages(),
-    install_requires=[
-        "numpy",
-        "tqdm",
-        "gymnasium",
-    ],
+    install_requires=["numpy", "tqdm", "gymnasium", "pymdptoolbox"],
     extras_require={
         "dev": ["jupyter", "pytest", "black", "isort"],
     },
