@@ -407,8 +407,8 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                     print(" {} |".format(grid[i, j]), end="")
             print("\n+" + "---+" * self.grid_size)
 
-    def repl(self, policy_vector=None, optimal_qs=None):
-        """Simple REPL for the environment. Can optionally take a policy vector and use it to select actions."""
+    def repl(self, policy=None, optimal_qs=None):
+        """Simple REPL for the environment. Can optionally take a tabular policy and use it to select actions."""
         print("Welcome to the StealingGridworld REPL.")
         print("Use the following commands:")
         print("  u: Move up")
@@ -425,12 +425,8 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         self.render()
         while True:
-            if policy_vector is not None:
-                print(
-                    "Policy action: {}".format(
-                        self._action_to_string(policy_vector[self.get_state_index(self._get_observation())])
-                    )
-                )
+            if policy is not None:
+                print("Policy action: {}".format(self._action_to_string(policy.predict(self._get_observation()))))
             if optimal_qs is not None:
                 for action in range(self.action_space.n):
                     print(
@@ -450,11 +446,11 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                     print("Invalid action.")
                     continue
                 except IndexError:
-                    if policy_vector is None:
-                        print("No policy vector given.")
+                    if policy is None:
+                        print("No policy given.")
                         continue
                     else:
-                        action = policy_vector[self.get_state_index(self._get_observation())]
+                        action = policy.predict(self._get_observation())
 
             obs, reward, done, _ = self.step(action)
             total_reward += reward
@@ -468,13 +464,12 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         print("Total reward: {}".format(total_reward))
 
-    def rollout_with_policy_vector(self, policy_vector, render=False):
+    def rollout_with_policy(self, policy, render=False):
         """
-        Runs a rollout of the environment using the given policy vector. A policy vector is a 1D array of length
-        num_states, assigning an action to each state.
+        Runs a rollout of the environment using the given tabular policy.
 
         Args:
-            policy_vector (np.ndarray): Policy vector.
+            policy (value_iteration.TabularPolicy): TabularPolicy for this environment.
 
         Returns:
             list: List of (state, action, reward) tuples.
@@ -487,7 +482,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             self.render()
 
         while not done:
-            action = policy_vector[self.get_state_index(state)]
+            action = policy.predict(state)
             next_state, reward, done, _ = self.step(self.get_action_index(action))
             rollout.append((state, action, reward))
             if self.get_state_index(state) == self.get_state_index(next_state):
@@ -505,7 +500,5 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 if __name__ == "__main__":
     env = StealingGridworld()
     print(f"State space size: {len(env.states)}")
-    transition_matrix, reward_vector = env.get_sparse_transition_matrix_and_reward_vector()
-    optimal_qs, optimal_values = value_iteration.run_value_iteration(transition_matrix, reward_vector, 100, 0.99)
-    optimal_policy = value_iteration.get_optimal_policy_from_qs(optimal_qs)
+    optimal_policy = value_iteration.get_optimal_policy(env)
     env.repl(optimal_policy)

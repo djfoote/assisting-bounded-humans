@@ -39,8 +39,47 @@ def run_value_iteration(
     return optimal_qs[0], optimal_values[0]
 
 
-def get_optimal_policy_from_qs(optimal_qs):
+def get_optimal_policy_vector_from_qs(optimal_qs):
     """
-    Returns the optimal policy given the optimal Q values.
+    Returns the optimal policy vector given the optimal Q values. The policy vector is numerically indexed, rather than
+    using an informative state representation.
     """
     return np.argmax(optimal_qs, axis=1)
+
+
+def get_optimal_policy(env, gamma=0.99, horizon=None):
+    """
+    Returns the optimal policy for the given environment.
+
+    Args:
+        env: The environment to compute the optimal policy for.
+        gamma: The discount factor.
+        horizon: The number of steps to run value iteration for. If None, defaults to the horizon of the environment.
+    """
+    if horizon is None:
+        if hasattr(env, "max_steps"):
+            horizon = env.max_steps
+        else:
+            raise ValueError("Must specify horizon if environment does not have max_steps.")
+
+    transition_matrix, reward_vector = env.get_sparse_transition_matrix_and_reward_vector()
+    optimal_qs, _ = run_value_iteration(transition_matrix, reward_vector, horizon=horizon, gamma=gamma)
+    optimal_policy_vector = get_optimal_policy_vector_from_qs(optimal_qs)
+    return TabularPolicy(env, optimal_policy_vector)
+
+
+class TabularPolicy:
+    def __init__(self, env, policy_vector):
+        self.env = env
+        self.policy_vector = policy_vector
+
+    def predict(self, state):
+        state_index = self.env.get_state_index(state)
+        return self.policy_vector[state_index]
+
+
+class RandomPolicy(TabularPolicy):
+    def __init__(self, env, seed=None):
+        if seed is not None:
+            np.random.seed(seed)
+        super().__init__(env, np.random.randint(env.action_space.n, size=env.observation_space.n))
