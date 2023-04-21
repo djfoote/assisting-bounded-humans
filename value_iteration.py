@@ -3,7 +3,7 @@ import tqdm
 from mdptoolbox import mdp
 from scipy import sparse
 
-import gridworlds
+from deterministic_mdp import DeterministicMDP
 
 
 def run_value_iteration(
@@ -77,7 +77,7 @@ def get_optimal_policy(env, gamma=0.99, horizon=None, alt_reward_fn=None):
 
 
 class TabularPolicy:
-    def __init__(self, env: gridworlds.DeterministicMDP, policy_vector: np.ndarray):
+    def __init__(self, env: DeterministicMDP, policy_vector: np.ndarray):
         self.env = env
         self.policy_vector = policy_vector
 
