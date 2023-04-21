@@ -614,10 +614,8 @@ if __name__ == "__main__":
     STEPS = 20
     env = StealingGridworld(grid_size=3, max_steps=STEPS)
     print(f"State space size: {len(env.states)}")
-    # optimal_policy = value_iteration.get_optimal_policy(env)
 
     dummy_reward = lambda states, *args: np.array([s["agent_position"][0] for s in states])
-    # run_to_wall_policy = value_iteration.get_optimal_policy(env, alt_reward_fn=dummy_reward)
     traj_gen = DeterministicMDPTrajGenerator(dummy_reward, env, None)
     print("Before training (random policy):")
     env.render_rollout(traj_gen.sample(1)[0])
