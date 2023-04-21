@@ -84,8 +84,17 @@ class DeterministicMDP(abc.ABC):
             self._action_index = {self.encode_action(action): i for i, action in enumerate(self.actions)}
         return self._action_index[self.encode_action(action)]
 
-    def reward_fn_vectorized(self, state, action, next_state, done):
-        return np.array([self.reward(state, action) for state, action in zip(state, action)])
+    @property
+    def reward_fn_vectorized(self):
+        """
+        Return a vectorized version of the reward function. Useful for setting reward_fn in a TrajectoryGenerator to
+        the true reward function.
+        """
+
+        def env_reward_fn(state, action, *args):
+            return np.array([self.reward(state, action) for state, action in zip(state, action)])
+
+        return env_reward_fn
 
     def get_sparse_transition_matrix_and_reward_vector(
         self,
