@@ -16,7 +16,7 @@ class DeterministicMDP(abc.ABC):
     @abc.abstractmethod
     def successor(self, state, action):
         """
-        Given a state and action, return the successor state.
+        Given a state and action, return the successor state and reward.
         """
         raise NotImplementedError
 
