@@ -53,7 +53,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         # 4. Carried pellets (number of carried pellets as an int, smeared across all pixels)
         upper_bounds = np.ones((4, grid_size, grid_size))
         upper_bounds[3, :, :] = self.num_pellets
-        self.observations = spaces.Box(
+        self.observation_space = spaces.Box(
             low=np.array(np.zeros((4, self.grid_size, self.grid_size))),
             high=np.array(upper_bounds),
             shape=(4, grid_size, grid_size),
