@@ -121,18 +121,25 @@ class DeterministicMDP(abc.ABC):
 
         if alt_reward_fn is not None:
             # TODO: might have a batch size issue here; trying to predict for |S| * |A| inputs.
-            state_mesh, action_mesh = np.meshgrid(self.states, self.actions, indexing="ij")
-            states, actions = state_mesh.reshape(-1), action_mesh.reshape(-1)
+            state_inputs = np.repeat(self.states, len(self.actions), axis=0)
+            action_inputs = np.tile(self.actions, (len(self.states)))
             if isinstance(alt_reward_fn, reward_nets.RewardNet):
                 rewards = alt_reward_fn.predict(
-                    state=states,
-                    action=actions,
-                    next_state=states,
-                    done=np.zeros_like(states, dtype=np.bool),
+                    state=state_inputs,
+                    action=action_inputs,
+                    next_state=state_inputs,
+                    done=np.zeros_like(state_inputs, dtype=np.bool),
                 )
             else:
                 # Use the reward_function.RewardFn protocol
-                rewards = np.array(alt_reward_fn(states, actions, states, np.zeros_like(states, dtype=np.bool)))
+                rewards = np.array(
+                    alt_reward_fn(
+                        state_inputs,
+                        action_inputs,
+                        state_inputs,
+                        np.zeros_like(state_inputs, dtype=np.bool_),
+                    )
+                )
 
         data = np.ones_like(transitions, dtype=np.float32)
         row_indices = np.arange(num_states * num_actions, dtype=np.int32)
