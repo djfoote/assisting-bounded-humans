@@ -7,7 +7,8 @@ import tqdm
 from gymnasium import spaces
 from imitation.data.types import TrajectoryWithRew
 
-from deterministic_mdp import DeterministicMDP, DeterministicMDPTrajGenerator
+from deterministic_mdp import DeterministicMDP
+from imitation_modules import DeterministicMDPTrajGenerator
 
 
 class StealingGridworld(gym.Env, DeterministicMDP):
