@@ -7,6 +7,7 @@ import tqdm
 from gymnasium import spaces
 from imitation.data.types import TrajectoryWithRew
 
+import utils
 from deterministic_mdp import DeterministicMDP
 from imitation_modules import DeterministicMDPTrajGenerator
 
@@ -43,17 +44,20 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         self.action_space = spaces.Discrete(5)  # 0: up, 1: down, 2: left, 3: right, 4: interact
 
-        self.observation_space = spaces.Dict(
-            {
-                "agent_position": spaces.Box(low=0, high=grid_size - 1, shape=(2,), dtype=np.int32),
-                "free_pellet_locations": spaces.Box(
-                    low=0, high=grid_size - 1, shape=(num_free_pellets, 2), dtype=np.int32
-                ),
-                "owned_pellet_locations": spaces.Box(
-                    low=0, high=grid_size - 1, shape=(num_owned_pellets, 2), dtype=np.int32
-                ),
-                "num_carried_pellets": spaces.Discrete(self.num_pellets + 1),
-            }
+        self.categorical_spaces = [spaces.Discrete(self.num_pellets + 1)]
+
+        # Observation space is an image with 4 channels in c, corresponding to:
+        # 1. Agent position (binary)
+        # 2. Free pellet locations (binary)
+        # 3. Owned pellet locations (binary)
+        # 4. Carried pellets (number of carried pellets as an int, smeared across all pixels)
+        upper_bounds = np.ones((4, grid_size, grid_size))
+        upper_bounds[3, :, :] = self.num_pellets
+        self.observations = spaces.Box(
+            low=np.array(np.zeros((4, self.grid_size, self.grid_size))),
+            high=np.array(upper_bounds),
+            shape=(4, grid_size, grid_size),
+            dtype=np.int16,  # first three channels are binary, last channel is int (and small)
         )
 
         # TODO: make this configurable
@@ -106,16 +110,16 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         # Compute done
         done = self.steps >= self.max_steps
 
-        return self._get_observation(), reward, done, {}
+        return self._get_observation(), reward, done, {"state": self._get_state()}
 
     def successor(self, state, action):
         """
         Returns the successor state and reward for a given state and action.
         """
-        prev_state = self._get_observation()
+        prev_state = self._get_state()
         self._register_state(state)
         _, reward, _, _ = self.step(action)
-        successor_state = self._get_observation()
+        successor_state = self._get_state()
         self._register_state(prev_state)
         return successor_state, reward
 
@@ -123,9 +127,10 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         """
         Returns the reward for a given state and action.
         """
+        prev_state = self._get_state()
         self._register_state(state)
         _, reward, _, _ = self.step(action)
-
+        self._register_state(prev_state)
         return reward
 
     def enumerate_states(self):
@@ -185,7 +190,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             elif isinstance(value, list) or isinstance(value, tuple):
                 state_temp[key] = sorted(value)
             else:
-                state_temp[key] = value
+                state_temp[key] = int(value)
         return json.dumps(state_temp)
 
     def encode_action(self, action):
@@ -221,12 +226,32 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         self.pellet_locations[pellet_type] = np.delete(pellet_locations, pellet_indices[0], axis=0)
         self.num_carried_pellets += 1
 
-    def _get_observation(self):
+    def _get_state(self):
         return {
             "agent_position": self.agent_position,
             "free_pellet_locations": self.pellet_locations["free"],
             "owned_pellet_locations": self.pellet_locations["owned"],
             "num_carried_pellets": self.num_carried_pellets,
+        }
+
+    def _get_observation(self):
+        image = np.zeros((3, self.grid_size, self.grid_size), dtype=np.int16)
+        image[0, self.agent_position[0], self.agent_position[1]] = 1
+        for pellet_location in self.pellet_locations["free"]:
+            image[1, pellet_location[0], pellet_location[1]] = 1
+        for pellet_location in self.pellet_locations["owned"]:
+            image[2, pellet_location[0], pellet_location[1]] = 1
+        categorical = np.full((1, self.grid_size, self.grid_size), self.num_carried_pellets, dtype=np.int16)
+        return np.concatenate([image, categorical], axis=0)
+
+    def obs_to_state(self, obs):
+        image, categorical = utils.separate_image_and_categorical_state(np.array([obs]), self.categorical_spaces)
+        image, categorical = image[0], categorical[0]
+        return {
+            "agent_position": np.array(np.where(image[0, :, :] == 1)).T[0],
+            "free_pellet_locations": np.array(np.where(image[1, :, :] == 1)).T,
+            "owned_pellet_locations": np.array(np.where(image[2, :, :] == 1)).T,
+            "num_carried_pellets": np.where(categorical == 1)[0][0],
         }
 
     def _get_random_locations(self, n=1, excluding=None):
@@ -333,13 +358,13 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         self.render()
         while True:
             if policy is not None:
-                print("Policy action: {}".format(self._action_to_string(policy.predict(self._get_observation()))))
+                print("Policy action: {}".format(self._action_to_string(policy.predict(self._get_state()))))
             if optimal_qs is not None:
                 for action in range(self.action_space.n):
                     print(
                         "Q({}) = {}".format(
                             self._action_to_string(action),
-                            optimal_qs[0][self.get_state_index(self._get_observation())][action],
+                            optimal_qs[0][self.get_state_index(self._get_state())][action],
                         )
                     )
             action = input("Action: ")
@@ -357,9 +382,9 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                         print("No policy given.")
                         continue
                     else:
-                        action = policy.predict(self._get_observation())
+                        action = policy.predict(self._get_state())
 
-            obs, reward, done, _ = self.step(action)
+            _, reward, done, _ = self.step(action)
             total_reward += reward
             print("Reward: {}".format(reward))
             print()
