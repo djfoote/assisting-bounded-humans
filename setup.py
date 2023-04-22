@@ -7,6 +7,7 @@ setup(
         "numpy",
         "tqdm",
         "gymnasium",
+        "imitation",
     ],
     extras_require={
         "dev": ["jupyter", "pytest", "black", "isort"],

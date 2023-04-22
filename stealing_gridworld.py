@@ -1,116 +1,15 @@
-import abc
 import itertools
 import json
+from typing import Iterable, Tuple
 
 import gymnasium as gym
 import numpy as np
 import tqdm
 from gymnasium import spaces
-from scipy import sparse
+from imitation.data.types import TrajectoryWithRew
 
-import value_iteration
-
-
-class DeterministicMDP(abc.ABC):
-    """
-    A deterministic MDP.
-    """
-
-    @abc.abstractmethod
-    def successor(self, state, action):
-        """
-        Given a state and action, return the successor state.
-        """
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def reward(self, state, action):
-        """
-        Given a state and action, return the reward.
-        """
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def enumerate_states(self):
-        """
-        Enumerate all states in some consistent order.
-        """
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def enumerate_actions(self):
-        """
-        Enumerate all actions in some consistent order.
-        """
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def encode_state(self, state):
-        """
-        Encode a state as a string.
-        """
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def encode_action(self, action):
-        """
-        Encode an action as a string.
-        """
-        raise NotImplementedError
-
-    @property
-    def states(self):
-        if not hasattr(self, "_states"):
-            self._states = self.enumerate_states()
-        return self._states
-
-    @property
-    def actions(self):
-        if not hasattr(self, "_actions"):
-            self._actions = self.enumerate_actions()
-        return self._actions
-
-    def get_state_index(self, state):
-        if not hasattr(self, "_state_index"):
-            self._state_index = {self.encode_state(state): i for i, state in enumerate(self.states)}
-        return self._state_index[self.encode_state(state)]
-
-    def get_action_index(self, action):
-        if not hasattr(self, "_action_index"):
-            self._action_index = {self.encode_action(action): i for i, action in enumerate(self.actions)}
-        return self._action_index[self.encode_action(action)]
-
-    def get_sparse_transition_matrix_and_reward_vector(self):
-        """
-        Produce the data structures needed to run value iteration. Specifically, the sparse transition matrix and the
-        reward vector. The transition matrix is a sparse matrix of shape (num_states * num_actions, num_states), and the
-        reward vector is a vector of length num_states * num_actions.
-        """
-        num_states = len(self.states)
-        num_actions = len(self.actions)
-
-        transitions = []
-        rewards = []
-
-        for state in tqdm.tqdm(self.states, desc="Constructing transition matrix"):
-            for action in self.actions:
-                successor_state, reward = self.successor(state, action)
-
-                transitions.append(self.get_state_index(successor_state))
-                rewards.append(reward)
-
-        transitions = np.array(transitions, dtype=np.int32)
-        rewards = np.array(rewards, dtype=np.float32)
-
-        data = np.ones_like(transitions, dtype=np.float32)
-        row_indices = np.arange(num_states * num_actions, dtype=np.int32)
-        col_indices = transitions
-
-        transition_matrix = sparse.csr_matrix(
-            (data, (row_indices, col_indices)), shape=(num_states * num_actions, num_states)
-        )
-
-        return transition_matrix, rewards
+from deterministic_mdp import DeterministicMDP
+from imitation_modules import DeterministicMDPTrajGenerator
 
 
 class StealingGridworld(gym.Env, DeterministicMDP):
@@ -118,12 +17,12 @@ class StealingGridworld(gym.Env, DeterministicMDP):
     A gridworld in which the agent is rewarded for bringing home pellets, and punished for stealing pellets that belong
     to someone else.
 
-    The agent starts at the home location, and can move up, down, left, or right. It also has an "interact" action, which
-    handles picking up pellets and depositing them at home.
+    The agent starts at the home location, and can move up, down, left, or right. It also has an "interact" action,
+    which handles picking up pellets and depositing them at home.
 
     "Free" pellets and "owned" pellets are distinguished. The agent can pick up either type of pellet, but it will be
-    punished for picking up an "owned" pellet (i.e. stealing). The agent can only deposit pellets at home, and it will be
-    rewarded for each pellet deposited.
+    punished for picking up an "owned" pellet (i.e. stealing). The agent can only deposit pellets at home, and it will
+    be rewarded for each pellet deposited.
     """
 
     UP = 0
@@ -145,17 +44,20 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         self.action_space = spaces.Discrete(5)  # 0: up, 1: down, 2: left, 3: right, 4: interact
 
-        self.observation_space = spaces.Dict(
-            {
-                "agent_position": spaces.Box(low=0, high=grid_size - 1, shape=(2,), dtype=np.int32),
-                "free_pellet_locations": spaces.Box(
-                    low=0, high=grid_size - 1, shape=(num_free_pellets, 2), dtype=np.int32
-                ),
-                "owned_pellet_locations": spaces.Box(
-                    low=0, high=grid_size - 1, shape=(num_owned_pellets, 2), dtype=np.int32
-                ),
-                "num_carried_pellets": spaces.Discrete(self.num_pellets + 1),
-            }
+        self.categorical_spaces = [spaces.Discrete(self.num_pellets + 1)]
+
+        # Observation space is an image with 4 channels in c, corresponding to:
+        # 1. Agent position (binary)
+        # 2. Free pellet locations (binary)
+        # 3. Owned pellet locations (binary)
+        # 4. Carried pellets (number of carried pellets as an int, smeared across all pixels)
+        upper_bounds = np.ones((4, grid_size, grid_size))
+        upper_bounds[3, :, :] = self.num_pellets
+        self.observations = spaces.Box(
+            low=np.array(np.zeros((4, self.grid_size, self.grid_size))),
+            high=np.array(upper_bounds),
+            shape=(4, grid_size, grid_size),
+            dtype=np.int16,  # first three channels are binary, last channel is int (and small)
         )
 
         # TODO: make this configurable
@@ -216,8 +118,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         """
         prev_state = self._get_observation()
         self._register_state(state)
-        _, reward, _, _ = self.step(action)
-        successor_state = self._get_observation()
+        successor_state, reward, _, _ = self.step(action)
         self._register_state(prev_state)
         return successor_state, reward
 
@@ -258,12 +159,12 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                                 owned_pellet_locations = np.array(
                                     np.unravel_index(owned_pellet_locations_raveled, (self.grid_size, self.grid_size))
                                 ).T
-                                state = {
-                                    "agent_position": np.array(agent_position),
-                                    "free_pellet_locations": free_pellet_locations,
-                                    "owned_pellet_locations": owned_pellet_locations,
-                                    "num_carried_pellets": num_carried_pellets,
-                                }
+                                state = self._get_observation_from_state_components(
+                                    agent_position=np.array(agent_position),
+                                    num_carried_pellets=num_carried_pellets,
+                                    free_pellet_locations=free_pellet_locations,
+                                    owned_pellet_locations=owned_pellet_locations,
+                                )
                                 states.append(state)
 
         return states
@@ -278,17 +179,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         """
         Encodes state as a string.
         """
-        state_temp = {}
-        for key, value in state.items():
-            if isinstance(value, np.ndarray) and value.ndim == 2:
-                state_temp[key] = sorted(value.tolist())
-            elif isinstance(value, np.ndarray) and value.ndim == 1:
-                state_temp[key] = value.tolist()
-            elif isinstance(value, list) or isinstance(value, tuple):
-                state_temp[key] = sorted(value)
-            else:
-                state_temp[key] = value
-        return json.dumps(state_temp)
+        return ",".join(state.flatten().astype(str))
 
     def encode_action(self, action):
         """
@@ -300,12 +191,16 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         """
         Set the current environment state to the given state.
         """
-        self.agent_position = state["agent_position"]
+        image, categorical = separate_image_and_categorical_state(np.array([state]), self.categorical_spaces)
+        image = image[0]  # Remove batch dimension
+        categorical = categorical[0][0]  # Remove batch dimension AND categorical dimension (only one categorical var)
+
+        self.agent_position = np.array(np.where(image[0, :, :] == 1)).T[0]
         self.pellet_locations = {
-            "free": state["free_pellet_locations"],
-            "owned": state["owned_pellet_locations"],
+            "free": np.array(np.where(image[1, :, :] == 1)).T,
+            "owned": np.array(np.where(image[2, :, :] == 1)).T,
         }
-        self.num_carried_pellets = state["num_carried_pellets"]
+        self.num_carried_pellets = np.where(categorical == 1)[0][0]
 
     def _pick_up_pellet(self, pellet_type):
         """
@@ -324,12 +219,28 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         self.num_carried_pellets += 1
 
     def _get_observation(self):
-        return {
-            "agent_position": self.agent_position,
-            "free_pellet_locations": self.pellet_locations["free"],
-            "owned_pellet_locations": self.pellet_locations["owned"],
-            "num_carried_pellets": self.num_carried_pellets,
-        }
+        return self._get_observation_from_state_components(
+            self.agent_position,
+            self.pellet_locations["free"],
+            self.pellet_locations["owned"],
+            self.num_carried_pellets,
+        )
+
+    def _get_observation_from_state_components(
+        self,
+        agent_position,
+        free_pellet_locations,
+        owned_pellet_locations,
+        num_carried_pellets,
+    ):
+        image = np.zeros((3, self.grid_size, self.grid_size), dtype=np.int16)
+        image[0, agent_position[0], agent_position[1]] = 1
+        for pellet_location in free_pellet_locations:
+            image[1, pellet_location[0], pellet_location[1]] = 1
+        for pellet_location in owned_pellet_locations:
+            image[2, pellet_location[0], pellet_location[1]] = 1
+        categorical = np.full((1, self.grid_size, self.grid_size), num_carried_pellets, dtype=np.int16)
+        return np.concatenate([image, categorical], axis=0)
 
     def _get_random_locations(self, n=1, excluding=None):
         """
@@ -407,6 +318,15 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                     print(" {} |".format(grid[i, j]), end="")
             print("\n+" + "---+" * self.grid_size)
 
+    def render_rollout(self, rollout: TrajectoryWithRew):
+        """Render a rollout."""
+        for state, action, reward in zip(rollout.obs, rollout.acts, rollout.rews):
+            self._register_state(state)
+            self.render()
+            print("Action: {}".format(self._action_to_string(action)))
+            print("Reward: {}".format(reward))
+            print("")
+
     def repl(self, policy=None, optimal_qs=None):
         """Simple REPL for the environment. Can optionally take a tabular policy and use it to select actions."""
         print("Welcome to the StealingGridworld REPL.")
@@ -464,41 +384,50 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         print("Total reward: {}".format(total_reward))
 
-    def rollout_with_policy(self, policy, render=False):
-        """
-        Runs a rollout of the environment using the given tabular policy.
 
-        Args:
-            policy (value_iteration.TabularPolicy): TabularPolicy for this environment.
-
-        Returns:
-            list: List of (state, action, reward) tuples.
-        """
-        rollout = []
-        state = self.reset()
-        done = False
-
-        if render:
-            self.render()
-
-        while not done:
-            action = policy.predict(state)
-            next_state, reward, done, _ = self.step(self.get_action_index(action))
-            rollout.append((state, action, reward))
-            if self.get_state_index(state) == self.get_state_index(next_state):
-                print(f"Repeated state: {state} with action {action}")
-                break  # Policy is deterministic, so if we're in the same state, we're done.
-            state = next_state
-            if render:
-                self.render()
-
-        if render:
-            print(f"Total reward: {sum(r for _, _, r in rollout)}")
-        return rollout
+def separate_image_and_categorical_state(
+    state: np.ndarray,
+    categorical_spaces: Iterable[spaces.Discrete],
+) -> Tuple[np.ndarray, Iterable[np.ndarray]]:
+    """
+    Separate the image and categorical components of the state.
+    Args:
+        state: A preprocessed batch of states.
+        categorical_spaces: The spaces of the categorical components of the state.
+    Returns:
+        A tuple of (image, categorical), where `image` is a batch of images and `categorical` is a list of batches
+        of categorical data, one-hot encoded.
+    """
+    _, total_channels, _, _ = state.shape
+    image_channels = total_channels - len(categorical_spaces)
+    image = state[:, :image_channels]
+    categorical = []
+    for i, space in enumerate(categorical_spaces):
+        category_values = state[:, image_channels + i, 0, 0]  # Smeared across all pixels; just take one.
+        categorical.append(np.eye(space.n)[category_values])
+    return image, categorical
 
 
 if __name__ == "__main__":
-    env = StealingGridworld()
+    GRID_SIZE = 3
+    STEPS = 20
+    env = StealingGridworld(grid_size=GRID_SIZE, max_steps=STEPS)
     print(f"State space size: {len(env.states)}")
-    optimal_policy = value_iteration.get_optimal_policy(env)
-    env.repl(optimal_policy)
+
+    target_location = np.zeros((GRID_SIZE, GRID_SIZE))
+    target_location[-1, -1] = 1
+    dummy_reward = lambda states, *args: np.array([np.all(s[0] == target_location) for s in states])
+    traj_gen = DeterministicMDPTrajGenerator(dummy_reward, env, None)
+    # print("Before training (random policy):")
+    # env.render_rollout(traj_gen.sample(1)[0])
+    # print("=====")
+
+    # traj_gen.train(STEPS)
+    # print("After training (Target location policy):")
+    # env.render_rollout(traj_gen.sample(1)[0])
+    # print("=====")
+
+    traj_gen.reward_fn = env.reward_fn_vectorized
+    traj_gen.train(STEPS)
+    print("After training (Optimal policy):")
+    env.render_rollout(traj_gen.sample(1)[0])

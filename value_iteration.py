@@ -3,6 +3,8 @@ import tqdm
 from mdptoolbox import mdp
 from scipy import sparse
 
+from deterministic_mdp import DeterministicMDP
+
 
 def run_value_iteration(
     sparse_transitions: sparse.csr_matrix,
@@ -47,7 +49,7 @@ def get_optimal_policy_vector_from_qs(optimal_qs):
     return np.argmax(optimal_qs, axis=1)
 
 
-def get_optimal_policy(env, gamma=0.99, horizon=None):
+def get_optimal_policy(env, gamma=0.99, horizon=None, alt_reward_fn=None):
     """
     Returns the optimal policy for the given environment.
 
@@ -55,6 +57,12 @@ def get_optimal_policy(env, gamma=0.99, horizon=None):
         env: The environment to compute the optimal policy for.
         gamma: The discount factor.
         horizon: The number of steps to run value iteration for. If None, defaults to the horizon of the environment.
+        alt_reward_fn: An optional function that takes in a state and action and returns the reward for that
+            state-action pair. If None, defaults to the reward function of the environment. For reward learning
+            experiments.
+
+    Returns:
+        A TabularPolicy object, the optimal policy for the given environment (and reward function, if specified).
     """
     if horizon is None:
         if hasattr(env, "max_steps"):
@@ -62,14 +70,14 @@ def get_optimal_policy(env, gamma=0.99, horizon=None):
         else:
             raise ValueError("Must specify horizon if environment does not have max_steps.")
 
-    transition_matrix, reward_vector = env.get_sparse_transition_matrix_and_reward_vector()
+    transition_matrix, reward_vector = env.get_sparse_transition_matrix_and_reward_vector(alt_reward_fn=alt_reward_fn)
     optimal_qs, _ = run_value_iteration(transition_matrix, reward_vector, horizon=horizon, gamma=gamma)
     optimal_policy_vector = get_optimal_policy_vector_from_qs(optimal_qs)
     return TabularPolicy(env, optimal_policy_vector)
 
 
 class TabularPolicy:
-    def __init__(self, env, policy_vector):
+    def __init__(self, env: DeterministicMDP, policy_vector: np.ndarray):
         self.env = env
         self.policy_vector = policy_vector
 
@@ -82,4 +90,4 @@ class RandomPolicy(TabularPolicy):
     def __init__(self, env, seed=None):
         if seed is not None:
             np.random.seed(seed)
-        super().__init__(env, np.random.randint(env.action_space.n, size=env.observation_space.n))
+        super().__init__(env, np.random.randint(len(env.actions), size=len(env.states)))
