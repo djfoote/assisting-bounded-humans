@@ -1,6 +1,5 @@
 import numpy as np
 import tqdm
-from mdptoolbox import mdp
 from scipy import sparse
 
 from deterministic_mdp import DeterministicMDP
