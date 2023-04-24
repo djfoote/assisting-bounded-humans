@@ -4,6 +4,7 @@ import numpy as np
 import torch as th
 from gymnasium import spaces
 from imitation.algorithms import preference_comparisons
+from imitation.data.types import TrajectoryWithRew
 from imitation.rewards.reward_nets import RewardNet
 from imitation.util import networks, util
 
@@ -138,3 +139,55 @@ class NonImageCnnRewardNet(RewardNet):
             rewards = th.sum(outputs * action, dim=1)
 
         return rewards
+
+
+class SyntheticValueGatherer(preference_comparisons.SyntheticGatherer):
+    """
+    Computes synthetic preferences by a weighted combination of ground-truth environment rewards (present in the
+    trajectory fragment) and ground-truth optimal value at the end of the trajectory fragment (computed using value
+    iteration).
+    """
+
+    def __init__(
+        self,
+        env,
+        temperature=1.0,
+        rlhf_gamma=1.0,
+        sample=True,
+        rng=None,
+        threshold=50,
+        vi_horizon=None,
+        vi_gamma=0.99,
+        value_coeff=0.1,  # weight of value in synthetic reward
+        custom_logger=None,
+    ):
+        super().__init__(temperature, rlhf_gamma, sample, rng, threshold, custom_logger)
+
+        self.env = env
+        self.vi_horizon = vi_horizon
+        self.vi_gamma = vi_gamma
+
+        self.value_coeff = value_coeff
+
+        _, self.values = value_iteration.get_optimal_policy_and_values(
+            self.env, gamma=self.vi_gamma, horizon=self.vi_horizon
+        )
+
+    def _get_value(self, state):
+        return self.values[self.env.get_state_index(state)]
+
+    def _augment_fragment_pair_with_value(self, fragment_pair):
+        new_fragments = []
+        for fragment in fragment_pair:
+            final_state = fragment.obs[-1]
+            value = self._get_value(final_state)
+            new_rews = np.copy(fragment.rews)
+            new_rews[-1] += self.value_coeff * value
+            new_fragments.append(
+                TrajectoryWithRew(fragment.obs, fragment.acts, fragment.infos, fragment.terminal, new_rews)
+            )
+        return tuple(new_fragments)
+
+    def __call__(self, fragment_pairs):
+        fragment_pairs = [self._augment_fragment_pair_with_value(fp) for fp in fragment_pairs]
+        return super().__call__(fragment_pairs)
