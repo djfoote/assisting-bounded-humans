@@ -414,6 +414,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
         reward_trainer,
         feedback_queue_size=None,
         fragment_length=100,
+        transition_oversampling=1,
         initial_feedback_frac=0.1,
         initial_epoch_multiplier=200.0,
         custom_logger=None,
@@ -442,6 +443,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
 
         self.feedback_queue_size = feedback_queue_size
         self.fragment_length = fragment_length
+        self.transition_oversampling = transition_oversampling
         self.initial_feedback_frac = initial_feedback_frac
         self.initial_epoch_multiplier = initial_epoch_multiplier
 
@@ -468,13 +470,14 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
         reward_accuracy = None
 
         for i, num_queries in enumerate(schedule):
+            self.logger.log(f"Beggining iteration {i} of {self.num_iterations}")
+
             #######################
             # Gather new feedback #
             #######################
-            num_steps = num_queries * self.fragment_length
+            num_steps = np.ceil(self.transition_oversampling * num_queries * self.fragment_length).astype(int)
             self.logger.log(f"Collecting {num_queries} feedback queries ({num_steps} transitions)")
             trajectories = self.trajectory_generator.sample(num_steps)
-            #
             #  This assumes there are no fragments missing initial timesteps
             # (but allows for fragments missing terminal timesteps).
             horizons = (len(traj) for traj in trajectories if traj.terminal)
@@ -485,6 +488,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
             self.logger.log("Gathering feedback")
             feedback = self.feedback_gatherer(fragments)
             self.dataset.push(fragments, feedback)
+            print(f"Best reward: {np.max(feedback)} | Worst reward: {np.min(feedback)}")
             self.logger.log(f"Dataset now contains {len(self.dataset.reward_labels)} feedback queries")
 
             ######################
