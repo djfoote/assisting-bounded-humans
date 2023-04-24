@@ -1,5 +1,5 @@
 import itertools
-import json
+import pickle
 from typing import Iterable, Tuple
 
 import gymnasium as gym
@@ -48,6 +48,12 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         self.reward_for_depositing = reward_for_depositing
         self.reward_for_picking_up = reward_for_picking_up
         self.reward_for_stealing = reward_for_stealing
+
+        self.params_string = (
+            f"gs{grid_size}_nfp{num_free_pellets}_nop{num_owned_pellets}_rfd{reward_for_depositing}"
+            f"_rfp{reward_for_picking_up}_rfs{reward_for_stealing}"
+        )
+
         self.max_steps = max_steps
 
         self.action_space = spaces.Discrete(5)  # 0: up, 1: down, 2: left, 3: right, 4: interact
@@ -196,6 +202,9 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         Encodes action as a string.
         """
         return str(action)
+
+    def encode_mdp_params(self):
+        return "SG_" + self.params_string
 
     def _register_state(self, state):
         """

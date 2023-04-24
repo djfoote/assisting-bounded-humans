@@ -1,4 +1,5 @@
 import abc
+import os
 from typing import Union
 
 import numpy as np
@@ -55,6 +56,19 @@ class DeterministicMDP(abc.ABC):
         """
         raise NotImplementedError
 
+    def encode_mdp_params(self):
+        """
+        Encode the MDP parameters as a string. Used for saving/loading the transition matrix and reward vector for the
+        MDP, greatly speeding up the process of computing optimal policies.
+
+        By default, this just returns the name of the class. Override this if you want to save multiple MDPs of the same
+        class with different parameters.
+
+        Returns:
+            A string encoding the MDP parameters.
+        """
+        return self.__class__.__name__
+
     @property
     def states(self):
         if not hasattr(self, "_states"):
@@ -69,7 +83,12 @@ class DeterministicMDP(abc.ABC):
 
     def get_state_index(self, state):
         if not hasattr(self, "_state_index"):
-            self._state_index = {self.encode_state(state): i for i, state in enumerate(self.states)}
+            self._state_index = {
+                self.encode_state(state): i
+                for i, state in tqdm.tqdm(
+                    enumerate(self.states), desc="Constructing state index", total=len(self.states)
+                )
+            }
         return self._state_index[self.encode_state(state)]
 
     def get_action_index(self, action):
@@ -104,31 +123,9 @@ class DeterministicMDP(abc.ABC):
             A tuple of (transition_matrix, reward_vector).
         """
         if not (hasattr(self, "_sparse_transition_matrix") and hasattr(self, "_reward_vector")):
-            num_states = len(self.states)
-            num_actions = len(self.actions)
-
-            transitions = []
-            rewards = []
-
-            for state in tqdm.tqdm(self.states, desc="Constructing transition matrix"):
-                for action in self.actions:
-                    successor_state, reward = self.successor(state, action)
-
-                    transitions.append(self.get_state_index(successor_state))
-                    rewards.append(reward)
-
-            transitions = np.array(transitions, dtype=np.int32)
-            rewards = np.array(rewards, dtype=np.float32)
-            self._reward_vector = rewards
-
-            data = np.ones_like(transitions, dtype=np.float32)
-            row_indices = np.arange(num_states * num_actions, dtype=np.int32)
-            col_indices = transitions
-
-            transition_matrix = sparse.csr_matrix(
-                (data, (row_indices, col_indices)), shape=(num_states * num_actions, num_states)
-            )
-            self._sparse_transition_matrix = transition_matrix
+            if not self._load_sparse_transition_matrix_and_reward_vector_from_file():
+                self._compute_sparse_transition_matrix_and_reward_vector()
+                self._save_sparse_transition_matrix_and_reward_vector_to_file()
 
         if alt_reward_fn is not None:
             # TODO: might have a batch size issue here; trying to predict for |S| * |A| inputs.
@@ -154,6 +151,68 @@ class DeterministicMDP(abc.ABC):
             return self._sparse_transition_matrix, rewards
 
         return self._sparse_transition_matrix, self._reward_vector
+
+    def _compute_sparse_transition_matrix_and_reward_vector(self):
+        """
+        Compute the sparse transition matrix and reward vector for this MDP. This is a helper function for
+        get_sparse_transition_matrix_and_reward_vector, which caches the results.
+        """
+        num_states = len(self.states)
+        num_actions = len(self.actions)
+
+        transitions = []
+        rewards = []
+
+        for state in tqdm.tqdm(self.states, desc="Constructing transition matrix"):
+            for action in self.actions:
+                successor_state, reward = self.successor(state, action)
+
+                transitions.append(self.get_state_index(successor_state))
+                rewards.append(reward)
+
+        transitions = np.array(transitions, dtype=np.int32)
+        rewards = np.array(rewards, dtype=np.float32)
+        self._reward_vector = rewards
+
+        data = np.ones_like(transitions, dtype=np.float32)
+        row_indices = np.arange(num_states * num_actions, dtype=np.int32)
+        col_indices = transitions
+
+        transition_matrix = sparse.csr_matrix(
+            (data, (row_indices, col_indices)), shape=(num_states * num_actions, num_states)
+        )
+        self._sparse_transition_matrix = transition_matrix
+
+    def _save_sparse_transition_matrix_and_reward_vector_to_file(self, env_matrix_dir="env_matrices"):
+        """
+        Save the sparse transition matrix and reward vector to a file.
+        Args:
+            env_matrix_dir (str): Path to the directory containing the matrices. Defaults to "env_matrices".
+        """
+        os.makedirs(env_matrix_dir, exist_ok=True)
+        sparse.save_npz(
+            os.path.join(env_matrix_dir, f"{self.encode_mdp_params()}_transition.npz"),
+            self._sparse_transition_matrix,
+        )
+        np.save(os.path.join(env_matrix_dir, f"{self.encode_mdp_params()}_reward.npy"), self._reward_vector)
+
+    def _load_sparse_transition_matrix_and_reward_vector_from_file(self, env_matrix_dir="env_matrices"):
+        """
+        Load the sparse transition matrix and reward vector from a file.
+        Args:
+            env_matrix_dir (str): Path to the directory containing the matrices. Defaults to "env_matrices".
+
+        Returns:
+            Whether the file exists.
+        """
+        try:
+            self._sparse_transition_matrix = sparse.load_npz(
+                os.path.join(env_matrix_dir, f"{self.encode_mdp_params()}_transition.npz")
+            )
+            self._reward_vector = np.load(os.path.join(env_matrix_dir, f"{self.encode_mdp_params()}_reward.npy"))
+            return True
+        except FileNotFoundError:
+            return False
 
     def rollout_with_policy(
         self,
