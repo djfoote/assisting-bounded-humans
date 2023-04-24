@@ -1,5 +1,6 @@
 import abc
 import itertools
+import pickle
 from typing import Any, Dict, Tuple
 
 import numpy as np
@@ -232,7 +233,11 @@ class ScalarFeedbackDataset(data_th.Dataset):
     def __len__(self):
         assert len(self.fragments) == len(self.reward_labels)
         return len(self.reward_labels)
-
+    
+    def save(self, filename):
+        with open(filename, 'wb') as f:
+            pickle.dump(self, f)
+        
 
 class RandomSingleFragmenter(preference_comparisons.RandomFragmenter):
     """Fragmenter that samples single fragments rather than fragment pairs.
@@ -419,6 +424,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
         initial_epoch_multiplier=200.0,
         custom_logger=None,
         query_schedule="hyperbolic",
+        callback=None,
     ):
         super().__init__(custom_logger=custom_logger, allow_variable_horizon=False)
 
@@ -452,6 +458,8 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
         self.query_schedule = preference_comparisons.QUERY_SCHEDULES[query_schedule]
 
         self.dataset = ScalarFeedbackDataset(max_size=feedback_queue_size)
+
+        self.callback = callback
 
     def train(self, total_timesteps, total_queries):
         initial_queries = int(self.initial_feedback_frac * total_queries)
@@ -513,6 +521,10 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
             self.trajectory_generator.train(steps=num_steps)
 
             self.logger.dump(self._iteration)
+
+            if self.callback is not None:
+                self.callback(self)
+
             self._iteration += 1
 
         return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}
