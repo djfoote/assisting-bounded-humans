@@ -31,15 +31,21 @@ class StealingGridworld(gym.Env, DeterministicMDP):
     RIGHT = 3
     INTERACT = 4
 
-    # TODO: make these configurable
-    REWARD_FOR_DEPOSITING_PELLET = 1
-    REWARD_FOR_STEALING = -2
-
-    def __init__(self, grid_size=5, num_free_pellets=2, num_owned_pellets=1, max_steps=100):
+    def __init__(
+        self,
+        grid_size=5,
+        num_free_pellets=2,
+        num_owned_pellets=1,
+        reward_for_depositing=1,
+        reward_for_stealing=-2,
+        max_steps=100,
+    ):
         self.grid_size = grid_size
         self.num_free_pellets = num_free_pellets
         self.num_owned_pellets = num_owned_pellets
         self.num_pellets = num_free_pellets + num_owned_pellets
+        self.reward_for_depositing = reward_for_depositing
+        self.reward_for_stealing = reward_for_stealing
         self.max_steps = max_steps
 
         self.action_space = spaces.Discrete(5)  # 0: up, 1: down, 2: left, 3: right, 4: interact
@@ -102,10 +108,10 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         elif np.any(np.all(self.pellet_locations["free"] == self.agent_position, axis=1)):
             self._pick_up_pellet(pellet_type="free")
         elif np.any(np.all(self.pellet_locations["owned"] == self.agent_position, axis=1)):
-            reward = self.REWARD_FOR_STEALING
+            reward = self.reward_for_stealing
             self._pick_up_pellet(pellet_type="owned")
         elif np.all(self.agent_position == self.home_location) and self.num_carried_pellets > 0:
-            reward = self.num_carried_pellets * self.REWARD_FOR_DEPOSITING_PELLET
+            reward = self.num_carried_pellets * self.reward_for_depositing
             self.num_carried_pellets = 0
 
         # Compute done
