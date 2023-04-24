@@ -31,37 +31,46 @@ class StealingGridworld(gym.Env, DeterministicMDP):
     RIGHT = 3
     INTERACT = 4
 
-    # TODO: make these configurable
-    REWARD_FOR_DEPOSITING_PELLET = 1
-    REWARD_FOR_STEALING = -2
-
-    def __init__(self, grid_size=5, num_free_pellets=2, num_owned_pellets=1, max_steps=100):
+    def __init__(
+        self,
+        grid_size=5,
+        num_free_pellets=2,
+        num_owned_pellets=1,
+        reward_for_depositing=1,
+        reward_for_picking_up=0,
+        reward_for_stealing=-2,
+        max_steps=100,
+    ):
         self.grid_size = grid_size
         self.num_free_pellets = num_free_pellets
         self.num_owned_pellets = num_owned_pellets
         self.num_pellets = num_free_pellets + num_owned_pellets
+        self.reward_for_depositing = reward_for_depositing
+        self.reward_for_picking_up = reward_for_picking_up
+        self.reward_for_stealing = reward_for_stealing
         self.max_steps = max_steps
 
         self.action_space = spaces.Discrete(5)  # 0: up, 1: down, 2: left, 3: right, 4: interact
 
         self.categorical_spaces = [spaces.Discrete(self.num_pellets + 1)]
 
-        # Observation space is an image with 4 channels in c, corresponding to:
+        # Observation space is an image with 5 channels in c, corresponding to:
         # 1. Agent position (binary)
         # 2. Free pellet locations (binary)
         # 3. Owned pellet locations (binary)
-        # 4. Carried pellets (number of carried pellets as an int, smeared across all pixels)
-        upper_bounds = np.ones((4, grid_size, grid_size))
-        upper_bounds[3, :, :] = self.num_pellets
+        # 4. Home location (binary). This helps reward nets learn to go home.
+        # 5. Carried pellets (number of carried pellets as an int, smeared across all pixels)
+        upper_bounds = np.ones((5, grid_size, grid_size))
+        upper_bounds[-1, :, :] = self.num_pellets
         self.observation_space = spaces.Box(
-            low=np.array(np.zeros((4, self.grid_size, self.grid_size))),
+            low=np.array(np.zeros((5, self.grid_size, self.grid_size))),
             high=np.array(upper_bounds),
-            shape=(4, grid_size, grid_size),
+            shape=(5, grid_size, grid_size),
             dtype=np.int16,  # first three channels are binary, last channel is int (and small)
         )
 
         # TODO: make this configurable
-        self.home_location = np.array([0, 0])
+        self.home_location = np.array([self.grid_size // 2, self.grid_size // 2])
 
         self.reset()
 
@@ -99,12 +108,13 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         # Interact with environment
         elif np.any(np.all(self.pellet_locations["free"] == self.agent_position, axis=1)):
+            reward = self.reward_for_picking_up
             self._pick_up_pellet(pellet_type="free")
         elif np.any(np.all(self.pellet_locations["owned"] == self.agent_position, axis=1)):
-            reward = self.REWARD_FOR_STEALING
+            reward = self.reward_for_stealing
             self._pick_up_pellet(pellet_type="owned")
         elif np.all(self.agent_position == self.home_location) and self.num_carried_pellets > 0:
-            reward = self.num_carried_pellets * self.REWARD_FOR_DEPOSITING_PELLET
+            reward = self.num_carried_pellets * self.reward_for_depositing
             self.num_carried_pellets = 0
 
         # Compute done
@@ -233,12 +243,13 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         owned_pellet_locations,
         num_carried_pellets,
     ):
-        image = np.zeros((3, self.grid_size, self.grid_size), dtype=np.int16)
+        image = np.zeros((4, self.grid_size, self.grid_size), dtype=np.int16)
         image[0, agent_position[0], agent_position[1]] = 1
         for pellet_location in free_pellet_locations:
             image[1, pellet_location[0], pellet_location[1]] = 1
         for pellet_location in owned_pellet_locations:
             image[2, pellet_location[0], pellet_location[1]] = 1
+        image[3, self.home_location[0], self.home_location[1]] = 1
         categorical = np.full((1, self.grid_size, self.grid_size), num_carried_pellets, dtype=np.int16)
         return np.concatenate([image, categorical], axis=0)
 
@@ -296,8 +307,15 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             StealingGridworld.INTERACT: "INTERACT",
         }[action]
 
-    def render(self):
+    def render(self, state=None):
         """Simple ASCII rendering of the environment."""
+        if state is not None:
+            prev_state = self._get_observation()
+            self._register_state(state)
+            self.render()
+            self._register_state(prev_state)
+            return
+
         HOME = "H"
         OWNED_PELLET = "x"
         FREE_PELLET = "."

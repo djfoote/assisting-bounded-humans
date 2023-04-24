@@ -1,6 +1,5 @@
 import numpy as np
 import tqdm
-from mdptoolbox import mdp
 from scipy import sparse
 
 from deterministic_mdp import DeterministicMDP
@@ -64,6 +63,25 @@ def get_optimal_policy(env, gamma=0.99, horizon=None, alt_reward_fn=None):
     Returns:
         A TabularPolicy object, the optimal policy for the given environment (and reward function, if specified).
     """
+    optimal_policy, _ = get_optimal_policy_and_values(env, gamma, horizon, alt_reward_fn)
+    return optimal_policy
+
+
+def get_optimal_policy_and_values(env, gamma=0.99, horizon=None, alt_reward_fn=None):
+    """
+    Returns the optimal policy and values for the given environment.
+
+    Args:
+        env: The environment to compute the optimal policy for.
+        gamma: The discount factor.
+        horizon: The number of steps to run value iteration for. If None, defaults to the horizon of the environment.
+        alt_reward_fn: An optional function that takes in a state and action and returns the reward for that
+            state-action pair. If None, defaults to the reward function of the environment. For reward learning
+            experiments.
+
+    Returns:
+        A TabularPolicy object, the optimal policy for the given environment (and reward function, if specified).
+    """
     if horizon is None:
         if hasattr(env, "max_steps"):
             horizon = env.max_steps
@@ -71,9 +89,9 @@ def get_optimal_policy(env, gamma=0.99, horizon=None, alt_reward_fn=None):
             raise ValueError("Must specify horizon if environment does not have max_steps.")
 
     transition_matrix, reward_vector = env.get_sparse_transition_matrix_and_reward_vector(alt_reward_fn=alt_reward_fn)
-    optimal_qs, _ = run_value_iteration(transition_matrix, reward_vector, horizon=horizon, gamma=gamma)
+    optimal_qs, optimal_values = run_value_iteration(transition_matrix, reward_vector, horizon=horizon, gamma=gamma)
     optimal_policy_vector = get_optimal_policy_vector_from_qs(optimal_qs)
-    return TabularPolicy(env, optimal_policy_vector)
+    return TabularPolicy(env, optimal_policy_vector), optimal_values
 
 
 class TabularPolicy:
