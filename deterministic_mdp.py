@@ -181,6 +181,7 @@ class DeterministicMDP(abc.ABC):
         state = self.reset(seed=seed)
         # TODO: Might need to store state as a numerical array instead of human-readable dicts
         states = [state]
+        state_indices = [self.get_state_index(state)]
         actions = []
         rewards = []
         done = False
@@ -197,12 +198,16 @@ class DeterministicMDP(abc.ABC):
             if logging_callback is not None:
                 logging_callback(state, action, reward)
             states.append(next_state)
+            state_indices.append(self.get_state_index(next_state))
             actions.append(action)
             rewards.append(reward)
-            if self.get_state_index(state) == self.get_state_index(next_state) and fixed_horizon is None:
+            if self.get_state_index(next_state) in state_indices[:-1] and fixed_horizon is None:
                 if render:
-                    print(f"Repeated final state with action {action}")
-                break  # Policy is deterministic, so if we're in the same state, we're done.
+                    print("Repeated state, ending rollout early.")
+                # Policy is deterministic, so if we've been here before, we're in a loop.
+                # StealingGridworld only has one-off rewards, so we can just terminate as long as it's the only
+                # environment in use.
+                break
             state = next_state
             if render:
                 self.render()
