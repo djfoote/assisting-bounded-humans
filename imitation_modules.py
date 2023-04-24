@@ -300,6 +300,43 @@ class SyntheticScalarFeedbackGatherer(ScalarFeedbackGatherer):
         return [np.sum(fragment.rews) for fragment in fragments]
 
 
+class NoisyObservationGathererWrapper(ScalarFeedbackGatherer):
+    """Wraps a scalar feedback gatherer to handle the feedback giver seeing a noisy observation of state, rather than
+    the true environment state.
+
+    Current implementation only supports deterministic observation noise (such as occlusion). Later implementations
+    will pass a random seed to the observation function to support stochastic observation noise. For now, a stochastic
+    observation function will not fail, but will not be seed-able, so results will not be reproducible.
+    """
+
+    def __init__(self, gatherer: ScalarFeedbackGatherer, observe_fn):
+        self.wrapped_gatherer = gatherer
+        self.observe_fn = observe_fn
+
+    def __getattr__(self, name):
+        return getattr(self.wrapped_gatherer, name)
+
+    def __call__(self, fragments):
+        noisy_fragments = [self.observe_fn(fragment) for fragment in fragments]
+        return self.wrapped_gatherer(noisy_fragments)
+
+
+class ObservationFunction(abc.ABC):
+    """Abstract class for functions that take an observation and return a new observation."""
+
+    @abc.abstractmethod
+    def __call__(self, fragment):
+        """Returns a new fragment with observations, actions, and rewards filtered through an observation function.
+
+        Args:
+            fragment: a TrajectoryWithRew object.
+
+        Returns:
+            A new TrajectoryWithRew object with the same infos and terminal flag, but with the observations, actions,
+            and rewards filtered through the observation function.
+        """
+
+
 class ScalarFeedbackRewardTrainer(abc.ABC):
     """Base class for training a reward model using scalar feedback."""
 
