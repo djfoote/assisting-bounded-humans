@@ -6,6 +6,7 @@ import numpy as np
 import torch as th
 from gymnasium import spaces
 from imitation.algorithms import base, preference_comparisons
+from imitation.data import rollout
 from imitation.data.types import TrajectoryWithRew
 from imitation.rewards.reward_nets import RewardNet
 from imitation.util import logger as imit_logger
@@ -225,6 +226,13 @@ class ScalarFeedbackDataset(data_th.Dataset):
                 self.fragments = self.fragments[extra:]
                 self.reward_labels = self.reward_labels[extra:]
 
+    def __getitem__(self, index):
+        return self.fragments[index], self.reward_labels[index]
+
+    def __len__(self):
+        assert len(self.fragments) == len(self.reward_labels)
+        return len(self.reward_labels)
+
 
 class RandomSingleFragmenter(preference_comparisons.RandomFragmenter):
     """Fragmenter that samples single fragments rather than fragment pairs.
@@ -249,11 +257,17 @@ class ScalarFeedbackModel(nn.Module):
         """Computes scalar feedback labels for the given fragments."""
         reward_predictions = []
         for fragment in fragments:
-            preprocessed = self.model.preprocess(fragment.obs, fragment.acts, fragment.next_obs, fragment.dones)
+            transitions = rollout.flatten_trajectories([fragment])
+            preprocessed = self.model.preprocess(
+                transitions.obs,
+                transitions.acts,
+                transitions.next_obs,
+                transitions.dones,
+            )
             reward_prediction_per_step = self.model(*preprocessed)
+            assert reward_prediction_per_step.shape == (len(transitions.obs),)
             reward_prediction = th.sum(reward_prediction_per_step, dim=0)
             reward_predictions.append(reward_prediction)
-            assert reward_prediction.shape == (len(fragment.obs),)
         return th.stack(reward_predictions)
 
 
@@ -311,6 +325,16 @@ class ScalarFeedbackRewardTrainer(abc.ABC):
         """Train the reward model; see ``train`` for details."""
 
 
+class MSERewardLoss(preference_comparisons.RewardLoss):
+    """Compute the MSE between the given rewards and the feedback labels."""
+
+    def forward(self, fragments, feedback_labels, feedback_model):
+        """Computes the MSE between the given rewards and the feedback labels."""
+        reward_predictions = feedback_model(fragments)
+        feedback_th = th.as_tensor(feedback_labels, dtype=th.float32, device=reward_predictions.device)
+        return th.mean((reward_predictions - feedback_th) ** 2)
+
+
 class BasicScalarFeedbackRewardTrainer(ScalarFeedbackRewardTrainer):
     """Train a basic reward model from scalar feedback."""
 
@@ -354,7 +378,7 @@ class BasicScalarFeedbackRewardTrainer(ScalarFeedbackRewardTrainer):
             accumulated_size = 0
             self.optim.zero_grad()
             for fragments, feedback in dataloader:
-                loss = self._training_inner_loop(fragments, feedback)
+                loss = self._training_inner_loop(fragments, np.array(feedback))
                 loss *= len(fragments) / self.batch_size  # rescale loss to account for minibatching
                 train_loss += loss.item()
                 loss.backward()
@@ -368,8 +392,9 @@ class BasicScalarFeedbackRewardTrainer(ScalarFeedbackRewardTrainer):
 
     def _training_inner_loop(self, fragments, feedback):
         """Inner loop of training, for a single minibatch."""
-        output = self.loss.forward(fragments, feedback, self._feedback_model)
-        return output.loss
+        # The imitation implementation returns a NamedTuple where `loss` has to be unpacked.
+        # I've decided to skip all that for now.
+        return self.loss.forward(fragments, feedback, self._feedback_model)
 
 
 class ScalarRewardLearner(base.BaseImitationAlgorithm):
