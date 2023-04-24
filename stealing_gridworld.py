@@ -9,7 +9,7 @@ from gymnasium import spaces
 from imitation.data.types import TrajectoryWithRew
 
 from deterministic_mdp import DeterministicMDP
-from imitation_modules import DeterministicMDPTrajGenerator
+from imitation_modules import ObservationFunction
 
 
 class StealingGridworld(gym.Env, DeterministicMDP):
@@ -426,26 +426,29 @@ def separate_image_and_categorical_state(
     return image, categorical
 
 
-if __name__ == "__main__":
-    GRID_SIZE = 3
-    STEPS = 20
-    env = StealingGridworld(grid_size=GRID_SIZE, max_steps=STEPS)
-    print(f"State space size: {len(env.states)}")
+class PartialGridVisibility(ObservationFunction):
+    def __init__(self, env: StealingGridworld, visibility_mask=None):
+        self.env = env
 
-    target_location = np.zeros((GRID_SIZE, GRID_SIZE))
-    target_location[-1, -1] = 1
-    dummy_reward = lambda states, *args: np.array([np.all(s[0] == target_location) for s in states])
-    traj_gen = DeterministicMDPTrajGenerator(dummy_reward, env, None)
-    # print("Before training (random policy):")
-    # env.render_rollout(traj_gen.sample(1)[0])
-    # print("=====")
+        if visibility_mask is None:
+            # Default visibility mask: everything except the outermost ring.
+            if env.grid_size < 3:
+                raise ValueError(
+                    "Grid size must be at least 3 for default partial visibility. "
+                    "Increase grid size or specify visibility mask explicitly."
+                )
+            visibility_mask = np.ones((env.grid_size, env.grid_size), dtype=np.bool)
+            visibility_mask[0, :] = visibility_mask[-1, :] = visibility_mask[:, 0] = visibility_mask[:, -1] = False
 
-    # traj_gen.train(STEPS)
-    # print("After training (Target location policy):")
-    # env.render_rollout(traj_gen.sample(1)[0])
-    # print("=====")
+        self.visibility_mask = visibility_mask
 
-    traj_gen.reward_fn = env.reward_fn_vectorized
-    traj_gen.train(STEPS)
-    print("After training (Optimal policy):")
-    env.render_rollout(traj_gen.sample(1)[0])
+    def __call__(self, fragment):
+        # Mask out all but the number of pellets the agent is carrying (spatial representation is fake in that case).
+        masked_obs = fragment.obs[:, :-1] * self.visibility_mask[np.newaxis, np.newaxis]
+        new_obs = np.concatenate([masked_obs, fragment.obs[:, -1:]], axis=1)
+
+        # For timesteps where the agent is not in the visibility mask, set reward to 0.
+        agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
+        new_rew = fragment.rews * agent_visible
+
+        return TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, new_rew)
