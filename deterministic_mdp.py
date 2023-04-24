@@ -103,21 +103,32 @@ class DeterministicMDP(abc.ABC):
         Returns:
             A tuple of (transition_matrix, reward_vector).
         """
-        num_states = len(self.states)
-        num_actions = len(self.actions)
+        if not (hasattr(self, "_sparse_transition_matrix") and hasattr(self, "_reward_vector")):
+            num_states = len(self.states)
+            num_actions = len(self.actions)
 
-        transitions = []
-        rewards = []
+            transitions = []
+            rewards = []
 
-        for state in tqdm.tqdm(self.states, desc="Constructing transition matrix"):
-            for action in self.actions:
-                successor_state, reward = self.successor(state, action)
+            for state in tqdm.tqdm(self.states, desc="Constructing transition matrix"):
+                for action in self.actions:
+                    successor_state, reward = self.successor(state, action)
 
-                transitions.append(self.get_state_index(successor_state))
-                rewards.append(reward)
+                    transitions.append(self.get_state_index(successor_state))
+                    rewards.append(reward)
 
-        transitions = np.array(transitions, dtype=np.int32)
-        rewards = np.array(rewards, dtype=np.float32)
+            transitions = np.array(transitions, dtype=np.int32)
+            rewards = np.array(rewards, dtype=np.float32)
+            self._reward_vector = rewards
+
+            data = np.ones_like(transitions, dtype=np.float32)
+            row_indices = np.arange(num_states * num_actions, dtype=np.int32)
+            col_indices = transitions
+
+            transition_matrix = sparse.csr_matrix(
+                (data, (row_indices, col_indices)), shape=(num_states * num_actions, num_states)
+            )
+            self._sparse_transition_matrix = transition_matrix
 
         if alt_reward_fn is not None:
             # TODO: might have a batch size issue here; trying to predict for |S| * |A| inputs.
@@ -140,16 +151,9 @@ class DeterministicMDP(abc.ABC):
                         np.zeros_like(state_inputs, dtype=np.bool_),
                     )
                 )
+            return self._sparse_transition_matrix, rewards
 
-        data = np.ones_like(transitions, dtype=np.float32)
-        row_indices = np.arange(num_states * num_actions, dtype=np.int32)
-        col_indices = transitions
-
-        transition_matrix = sparse.csr_matrix(
-            (data, (row_indices, col_indices)), shape=(num_states * num_actions, num_states)
-        )
-
-        return transition_matrix, rewards
+        return self._sparse_transition_matrix, self._reward_vector
 
     def rollout_with_policy(
         self,
@@ -197,7 +201,7 @@ class DeterministicMDP(abc.ABC):
             rewards.append(reward)
             if self.get_state_index(state) == self.get_state_index(next_state) and fixed_horizon is None:
                 if render:
-                    print(f"Repeated state: {state} with action {action}")
+                    print(f"Repeated final state with action {action}")
                 break  # Policy is deterministic, so if we're in the same state, we're done.
             state = next_state
             if render:
