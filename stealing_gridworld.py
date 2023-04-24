@@ -37,6 +37,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         num_free_pellets=2,
         num_owned_pellets=1,
         reward_for_depositing=1,
+        reward_for_picking_up=0,
         reward_for_stealing=-2,
         max_steps=100,
     ):
@@ -45,6 +46,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         self.num_owned_pellets = num_owned_pellets
         self.num_pellets = num_free_pellets + num_owned_pellets
         self.reward_for_depositing = reward_for_depositing
+        self.reward_for_picking_up = reward_for_picking_up
         self.reward_for_stealing = reward_for_stealing
         self.max_steps = max_steps
 
@@ -106,6 +108,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         # Interact with environment
         elif np.any(np.all(self.pellet_locations["free"] == self.agent_position, axis=1)):
+            reward = self.reward_for_picking_up
             self._pick_up_pellet(pellet_type="free")
         elif np.any(np.all(self.pellet_locations["owned"] == self.agent_position, axis=1)):
             reward = self.reward_for_stealing
