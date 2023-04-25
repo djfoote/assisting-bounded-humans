@@ -233,11 +233,11 @@ class ScalarFeedbackDataset(data_th.Dataset):
     def __len__(self):
         assert len(self.fragments) == len(self.reward_labels)
         return len(self.reward_labels)
-    
+
     def save(self, filename):
-        with open(filename, 'wb') as f:
+        with open(filename, "wb") as f:
             pickle.dump(self, f)
-        
+
 
 class RandomSingleFragmenter(preference_comparisons.RandomFragmenter):
     """Fragmenter that samples single fragments rather than fragment pairs.
