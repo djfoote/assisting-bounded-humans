@@ -16,7 +16,6 @@ from torch import nn
 from torch.utils import data as data_th
 from tqdm.auto import tqdm
 
-from evaluate_reward_model import get_proportion_of_aberrant_trajectories
 import value_iteration
 
 
@@ -462,6 +461,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
         initial_epoch_multiplier=200.0,
         custom_logger=None,
         query_schedule="hyperbolic",
+        policy_evaluator=None,
         callback=None,
     ):
         super().__init__(custom_logger=custom_logger, allow_variable_horizon=False)
@@ -497,6 +497,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
 
         self.dataset = ScalarFeedbackDataset(max_size=feedback_queue_size)
 
+        self.policy_evaluator = policy_evaluator
         self.callback = callback
 
     def train(self, total_timesteps, total_queries):
@@ -565,14 +566,16 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
             # Log information #
             ###################
 
-            with networks.evaluating(self.model):
-                prop_bad_trajs = get_proportion_of_aberrant_trajectories(
-                    policy=self.trajectory_generator.policy,
-                    env=self.trajectory_generator.env,
-                    num_trajs=1000,
-                )
-                self.logger.log(f"Proportion of aberrant trajectories: {prop_bad_trajs}")
-
+            if self.policy_evaluator is not None:
+                with networks.evaluating(self.model):
+                    prop_bad, prop_bad_per_condition = self.policy_evaluator.evaluate(
+                        policy=self.trajectory_generator.policy,
+                        env=self.trajectory_generator.env,
+                        num_trajs=1000,
+                    )
+                    self.logger.log(f"Proportion of bad trajectories: {prop_bad}")
+                    for condition, prop in prop_bad_per_condition.items():
+                        self.logger.log(f"  Proportion of trajectories in condition {condition}: {prop}")
 
             self.logger.dump(self._iteration)
 
