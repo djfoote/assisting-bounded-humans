@@ -16,6 +16,7 @@ from torch import nn
 from torch.utils import data as data_th
 from tqdm.auto import tqdm
 
+from evaluate_reward_model import get_proportion_of_aberrant_trajectories
 import value_iteration
 
 
@@ -515,7 +516,10 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
         reward_accuracy = None
 
         for i, num_queries in enumerate(schedule):
-            self.logger.log(f"Beggining iteration {i} of {self.num_iterations}")
+            iter_log_str = f"Beggining iteration {i} of {self.num_iterations}"
+            if self._iteration != i:
+                iter_log_str += f" (global iteration {self._iteration})"
+            self.logger.log(iter_log_str)
 
             #######################
             # Gather new feedback #
@@ -556,6 +560,19 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
 
             self.logger.log(f"Training agent for {num_steps} timesteps")
             self.trajectory_generator.train(steps=num_steps)
+
+            ###################
+            # Log information #
+            ###################
+
+            with networks.evaluating(self.model):
+                prop_bad_trajs = get_proportion_of_aberrant_trajectories(
+                    policy=self.trajectory_generator.policy,
+                    env=self.trajectory_generator.env,
+                    num_trajs=1000,
+                )
+                self.logger.log(f"Proportion of aberrant trajectories: {prop_bad_trajs}")
+
 
             self.logger.dump(self._iteration)
 
