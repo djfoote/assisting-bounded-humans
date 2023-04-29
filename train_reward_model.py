@@ -1,39 +1,36 @@
 # Copy of code from experiment ipython notebook
 
-import time
 import os
-import numpy as np
 import pickle
+import time
+
+import numpy as np
 import torch as th
 from imitation.algorithms import preference_comparisons
 
+from evaluate_reward_model import full_visibility_evaluator_factory, partial_visibility_evaluator_factory
 from imitation_modules import (
     BasicScalarFeedbackRewardTrainer,
     DeterministicMDPTrajGenerator,
     MSERewardLoss,
+    NoisyObservationGathererWrapper,
     NonImageCnnRewardNet,
     RandomSingleFragmenter,
     ScalarFeedbackModel,
     ScalarRewardLearner,
     SyntheticScalarFeedbackGatherer,
-    NoisyObservationGathererWrapper,
 )
-from stealing_gridworld import StealingGridworld, PartialGridVisibility
-from evaluate_reward_model import (
-    full_visibility_evaluator_factory,
-    partial_visibility_evaluator_factory,
-)
-
+from stealing_gridworld import PartialGridVisibility, StealingGridworld
 
 #######################################################################################################################
 ##################################################### Run params ######################################################
 #######################################################################################################################
 
 
-CONTINUE_TRAINING_MODEL_NAME = "partial-vis_scalar_reward_model_5_32,32_3_20230424_210742"
+CONTINUE_TRAINING_MODEL_NAME = None
 GPU_NUMBER = 7
-N_ITER = 20
-N_COMPARISONS = 10_000
+N_ITER = 40
+N_COMPARISONS = 20_000
 
 
 #######################################################################################################################
@@ -51,14 +48,17 @@ SEED = 0
 
 DATASET_MAX_SIZE = 10_000
 
-VISIBILITY = "partial"
-visibility_mask = np.array([
-    [0, 0, 0, 0, 0],
-    [0, 1, 1, 1, 0],
-    [0, 1, 1, 1, 0],
-    [0, 1, 1, 1, 0],
-    [0, 0, 0, 0, 0],
-], dtype=np.bool_)
+VISIBILITY = "full"
+visibility_mask = np.array(
+    [
+        [0, 0, 0, 0, 0],
+        [0, 1, 1, 1, 0],
+        [0, 1, 1, 1, 0],
+        [0, 1, 1, 1, 0],
+        [0, 0, 0, 0, 0],
+    ],
+    dtype=np.bool_,
+)
 
 if VISIBILITY == "full":
     # Try to catch mistakes mixing up full and partial visibility setup.
@@ -103,7 +103,7 @@ if VISIBILITY == "partial":
     observation_function = PartialGridVisibility(
         env,
         visibility_mask=visibility_mask,
-    )    
+    )
     gatherer = NoisyObservationGathererWrapper(
         gatherer,
         observation_function,
@@ -128,10 +128,11 @@ def save_model_params_and_dataset_callback(reward_learner):
     th.save(reward_learner.model.state_dict(), f"saved_reward_models/{model_name}/latest_checkpoint.pt")
     th.save(
         reward_learner.model.state_dict(),
-        f"saved_reward_models/{model_name}/checkpoints/model_weights_iter{reward_learner._iteration}.pt"
+        f"saved_reward_models/{model_name}/checkpoints/model_weights_iter{reward_learner._iteration}.pt",
     )
     reward_learner.dataset.save(
-        f"saved_reward_models/{model_name}/checkpoints/dataset_iter{reward_learner._iteration}.pkl")
+        f"saved_reward_models/{model_name}/checkpoints/dataset_iter{reward_learner._iteration}.pkl"
+    )
     reward_learner.dataset.save(f"saved_reward_models/{model_name}/latest_dataset.pkl")
 
 
@@ -158,7 +159,7 @@ reward_learner = ScalarRewardLearner(
 
 if CONTINUE_TRAINING_MODEL_NAME is None:
     hid_channels_str = ",".join([str(x) for x in HID_CHANNELS])
-    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
     model_name = f"{VISIBILITY}-vis_scalar_reward_model_{GRID_SIZE}_{hid_channels_str}_{KERNEL_SIZE}_{timestamp}"
     print(f"Model name: {model_name}")
     os.makedirs(f"saved_reward_models/{model_name}/checkpoints", exist_ok=True)
@@ -167,7 +168,7 @@ else:
     # Get the most recent checkpoint and dataset
     checkpoint_files = os.listdir(f"saved_reward_models/{model_name}/checkpoints")
     checkpoint_files = [x for x in checkpoint_files if x.endswith(".pt")]
-    get_checkpoint = lambda x: int(x.split("_")[-1].split(".")[0][len("iter"):])
+    get_checkpoint = lambda x: int(x.split("_")[-1].split(".")[0][len("iter") :])
     checkpoint_files = sorted(checkpoint_files, key=get_checkpoint)
     checkpoint_file = checkpoint_files[-1]
 
@@ -175,9 +176,9 @@ else:
     reward_learner._iteration = get_checkpoint(checkpoint_file)
 
     dataset_filename = f"saved_reward_models/{model_name}/checkpoints/dataset_iter{reward_learner._iteration}.pkl"
-    with open(dataset_filename, 'rb') as f:
+    with open(dataset_filename, "rb") as f:
         reward_learner.dataset = pickle.load(f)
-    
+
     reward_learner.trajectory_generator.train(HORIZON)
 
     print(f"Continuing training model {model_name} from checkpoint {checkpoint_file}")
@@ -190,6 +191,6 @@ else:
 
 result = reward_learner.train(
     # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
-    total_timesteps=10 * N_ITER * HORIZON,  
+    total_timesteps=10 * N_ITER * HORIZON,
     total_queries=N_COMPARISONS,
 )
