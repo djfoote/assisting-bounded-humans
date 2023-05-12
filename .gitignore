@@ -2,8 +2,9 @@
 notebooks/images
 notebooks/videos
 
-# Model checkpoints
+# Model checkpoints and wandb logs
 saved_reward_models
+wandb
 
 # Mac
 .DS_Store

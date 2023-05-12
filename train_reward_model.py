@@ -7,7 +7,9 @@ import time
 import numpy as np
 import torch as th
 from imitation.algorithms import preference_comparisons
+from imitation.util import logger as imit_logger
 
+import wandb
 from evaluate_reward_model import full_visibility_evaluator_factory, partial_visibility_evaluator_factory
 from imitation_modules import (
     BasicScalarFeedbackRewardTrainer,
@@ -27,10 +29,9 @@ from stealing_gridworld import PartialGridVisibility, StealingGridworld
 #######################################################################################################################
 
 
-CONTINUE_TRAINING_MODEL_NAME = None
-GPU_NUMBER = 7
-N_ITER = 40
-N_COMPARISONS = 20_000
+GPU_NUMBER = None
+N_ITER = 20
+N_COMPARISONS = 10_000
 
 
 #######################################################################################################################
@@ -38,36 +39,66 @@ N_COMPARISONS = 20_000
 #######################################################################################################################
 
 
-GRID_SIZE = 5
-HORIZON = 30
+config = {
+    "environment": {
+        "name": "StealingGridworld",
+        "grid_size": 3,
+        "horizon": 30,
+        "reward_for_depositing": 100,
+        "reward_for_picking_up": 1,
+        "reward_for_stealing": -200,
+    },
+    "reward_model": {
+        "type": "NonImageCnnRewardNet",
+        "hid_channels": [32, 32],
+        "kernel_size": 3,
+    },
+    "seed": 0,
+    "dataset_max_size": 10_000,
+    "fragment_length": 3,
+    "feedback": {
+        "type": "scalar",
+    },
+    "visibility": {
+        "visibility": "full",
+        # Available visibility mask keys:
+        # "full": All of the grid is visible. Not actually used, but should be set for easier comparison.
+        # "(n-1)x(n-1)": All but the outermost ring of the grid is visible.
+        "visibility_mask_key": "full",
+    },
+}
 
-HID_CHANNELS = (32, 32)
-KERNEL_SIZE = 3
-
-SEED = 0
-
-DATASET_MAX_SIZE = 10_000
-
-VISIBILITY = "full"
-visibility_mask = np.array(
-    [
-        [0, 0, 0, 0, 0],
-        [0, 1, 1, 1, 0],
-        [0, 1, 1, 1, 0],
-        [0, 1, 1, 1, 0],
-        [0, 0, 0, 0, 0],
+wandb.login()
+run = wandb.init(
+    project="assisting-bounded-humans",
+    notes="trying to log more stuff including the config",
+    name="setup_debug_3",
+    tags=[
+        "debug",
     ],
-    dtype=np.bool_,
+    config=config,
 )
 
-if VISIBILITY == "full":
-    # Try to catch mistakes mixing up full and partial visibility setup.
-    del visibility_mask
-    policy_evaluator = full_visibility_evaluator_factory()
-elif VISIBILITY == "partial":
-    policy_evaluator = partial_visibility_evaluator_factory(visibility_mask)
-else:
-    raise ValueError(f"Unknown visibility type {VISIBILITY}.")
+
+if wandb.config["feedback"]["type"] != "scalar":
+    raise NotImplementedError("Only scalar feedback is supported at the moment.")
+
+
+if wandb.config["visibility"]["visibility"] == "full" and wandb.config["visibility"]["visibility_mask_key"] != "full":
+    raise ValueError(
+        f'If visibility is "full", then visibility mask key must be "full".'
+        f'Instead, it is {wandb.config["visibility"]["visibility_mask_key"]}.'
+    )
+
+
+def construct_visibility_mask(grid_size, visibility_mask_key):
+    # Any other visibility mask keys should be added here.
+    if visibility_mask_key == "(n-1)x(n-1)":
+        visibility_mask = np.zeros((grid_size, grid_size), dtype=np.bool_)
+        visibility_mask[1:-1, 1:-1] = True
+        return visibility_mask
+    else:
+        raise ValueError(f"Unknown visibility mask key {visibility_mask_key}.")
 
 
 #######################################################################################################################
@@ -76,20 +107,26 @@ else:
 
 
 env = StealingGridworld(
-    grid_size=GRID_SIZE,
-    max_steps=HORIZON,
-    reward_for_depositing=100,
-    reward_for_picking_up=1,
-    reward_for_stealing=-200,
+    grid_size=wandb.config["environment"]["grid_size"],
+    max_steps=wandb.config["environment"]["horizon"],
+    reward_for_depositing=wandb.config["environment"]["reward_for_depositing"],
+    reward_for_picking_up=wandb.config["environment"]["reward_for_picking_up"],
+    reward_for_stealing=wandb.config["environment"]["reward_for_stealing"],
 )
+
+
+if wandb.config["reward_model"]["type"] != "NonImageCnnRewardNet":
+    raise ValueError(f'Unknown reward model type {wandb.config["reward_model"]["type"]}.')
+
+
 reward_net = NonImageCnnRewardNet(
     env.observation_space,
     env.action_space,
-    hid_channels=HID_CHANNELS,
-    kernel_size=KERNEL_SIZE,
+    hid_channels=wandb.config["reward_model"]["hid_channels"],
+    kernel_size=wandb.config["reward_model"]["kernel_size"],
 )
 
-rng = np.random.default_rng(SEED)
+rng = np.random.default_rng(wandb.config["seed"])
 
 if GPU_NUMBER is not None:
     device = th.device(f"cuda:{GPU_NUMBER}" if th.cuda.is_available() else "cpu")
@@ -99,15 +136,20 @@ if GPU_NUMBER is not None:
 fragmenter = RandomSingleFragmenter(rng=rng)
 gatherer = SyntheticScalarFeedbackGatherer(rng=rng)
 
-if VISIBILITY == "partial":
-    observation_function = PartialGridVisibility(
-        env,
-        visibility_mask=visibility_mask,
+
+if wandb.config["visibility"]["visibility"] != "full":
+    visibility_mask = construct_visibility_mask(
+        wandb.config["environment"]["grid_size"],
+        wandb.config["visibility"]["visibility_mask_key"],
     )
-    gatherer = NoisyObservationGathererWrapper(
-        gatherer,
-        observation_function,
-    )
+    observation_function = PartialGridVisibility(env, visibility_mask=visibility_mask)
+    gatherer = NoisyObservationGathererWrapper(gatherer, observation_function)
+    policy_evaluator = partial_visibility_evaluator_factory(visibility_mask)
+elif wandb.config["visibility"]["visibility"] == "full":
+    policy_evaluator = full_visibility_evaluator_factory()
+else:
+    raise ValueError(f'Unknown visibility {wandb.config["visibility"]}.')
+
 
 feedback_model = ScalarFeedbackModel(model=reward_net)
 reward_trainer = BasicScalarFeedbackRewardTrainer(
@@ -122,18 +164,22 @@ trajectory_generator = DeterministicMDPTrajGenerator(
     rng=None,  # This doesn't work yet
     epsilon=0.1,
 )
+logger = imit_logger.configure(format_strs=["stdout", "wandb"])
 
 
 def save_model_params_and_dataset_callback(reward_learner):
-    th.save(reward_learner.model.state_dict(), f"saved_reward_models/{model_name}/latest_checkpoint.pt")
-    th.save(
-        reward_learner.model.state_dict(),
-        f"saved_reward_models/{model_name}/checkpoints/model_weights_iter{reward_learner._iteration}.pt",
-    )
-    reward_learner.dataset.save(
-        f"saved_reward_models/{model_name}/checkpoints/dataset_iter{reward_learner._iteration}.pkl"
-    )
-    reward_learner.dataset.save(f"saved_reward_models/{model_name}/latest_dataset.pkl")
+    data_dir = os.path.join(wandb.run.dir, "saved_reward_models")
+    latest_checkpoint_path = os.path.join(data_dir, "latest_checkpoint.pt")
+    latest_dataset_path = os.path.join(data_dir, "latest_dataset.pkl")
+    checkpoints_dir = os.path.join(data_dir, "checkpoints")
+    checkpoint_iter_path = os.path.join(checkpoints_dir, f"model_weights_iter{reward_learner._iteration}.pt")
+    dataset_iter_path = os.path.join(checkpoints_dir, f"dataset_iter{reward_learner._iteration}.pkl")
+
+    os.makedirs(checkpoints_dir, exist_ok=True)
+    th.save(reward_learner.model.state_dict(), latest_checkpoint_path)
+    th.save(reward_learner.model.state_dict(), checkpoint_iter_path)
+    reward_learner.dataset.save(latest_dataset_path)
+    reward_learner.dataset.save(dataset_iter_path)
 
 
 reward_learner = ScalarRewardLearner(
@@ -142,46 +188,15 @@ reward_learner = ScalarRewardLearner(
     num_iterations=N_ITER,
     fragmenter=fragmenter,
     feedback_gatherer=gatherer,
-    feedback_queue_size=DATASET_MAX_SIZE,
+    feedback_queue_size=wandb.config["dataset_max_size"],
     reward_trainer=reward_trainer,
-    fragment_length=3,
+    fragment_length=wandb.config["fragment_length"],
     transition_oversampling=5,
     initial_epoch_multiplier=1,
     policy_evaluator=policy_evaluator,
+    custom_logger=logger,
     callback=save_model_params_and_dataset_callback,
 )
-
-
-#######################################################################################################################
-############################################## Set up saving and loading ##############################################
-#######################################################################################################################
-
-
-if CONTINUE_TRAINING_MODEL_NAME is None:
-    hid_channels_str = ",".join([str(x) for x in HID_CHANNELS])
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    model_name = f"{VISIBILITY}-vis_scalar_reward_model_{GRID_SIZE}_{hid_channels_str}_{KERNEL_SIZE}_{timestamp}"
-    print(f"Model name: {model_name}")
-    os.makedirs(f"saved_reward_models/{model_name}/checkpoints", exist_ok=True)
-else:
-    model_name = CONTINUE_TRAINING_MODEL_NAME
-    # Get the most recent checkpoint and dataset
-    checkpoint_files = os.listdir(f"saved_reward_models/{model_name}/checkpoints")
-    checkpoint_files = [x for x in checkpoint_files if x.endswith(".pt")]
-    get_checkpoint = lambda x: int(x.split("_")[-1].split(".")[0][len("iter") :])
-    checkpoint_files = sorted(checkpoint_files, key=get_checkpoint)
-    checkpoint_file = checkpoint_files[-1]
-
-    reward_learner.model.load_state_dict(th.load(f"saved_reward_models/{model_name}/checkpoints/{checkpoint_file}"))
-    reward_learner._iteration = get_checkpoint(checkpoint_file)
-
-    dataset_filename = f"saved_reward_models/{model_name}/checkpoints/dataset_iter{reward_learner._iteration}.pkl"
-    with open(dataset_filename, "rb") as f:
-        reward_learner.dataset = pickle.load(f)
-
-    reward_learner.trajectory_generator.train(HORIZON)
-
-    print(f"Continuing training model {model_name} from checkpoint {checkpoint_file}")
 
 
 #######################################################################################################################
@@ -191,6 +206,6 @@ else:
 
 result = reward_learner.train(
     # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
-    total_timesteps=10 * N_ITER * HORIZON,
+    total_timesteps=10 * N_ITER * wandb.config["environment"]["horizon"],
     total_queries=N_COMPARISONS,
 )
