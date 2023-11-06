@@ -601,9 +601,9 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
                         env=self.trajectory_generator.env,
                         num_trajs=1000,
                     )
-                    self.logger.record("prop_bad_rollouts", prop_bad)
+                    self.logger.record("policy_behavior/prop_bad_rollouts", prop_bad)
                     for condition, prop in prop_bad_per_condition.items():
-                        self.logger.record(f"prop_bad_rollouts_{condition}", prop)
+                        self.logger.record(f"policy_behavior/prop_bad_rollouts_{condition}", prop)
 
             self.logger.dump(self._iteration)
 

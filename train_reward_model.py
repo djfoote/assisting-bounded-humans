@@ -35,7 +35,7 @@ N_COMPARISONS = 10_000
 
 
 #######################################################################################################################
-##################################################### Task params #####################################################
+##################################################### Expt params #####################################################
 #######################################################################################################################
 
 
@@ -55,9 +55,15 @@ config = {
     },
     "seed": 0,
     "dataset_max_size": 10_000,
-    "fragment_length": 3,
+    # If fragment_length is None, then the whole trajectory is used as a single fragment.
+    "fragment_length": None,
+    "transition_oversampling": 10,
+    "initial_epoch_multiplier": 1,
     "feedback": {
         "type": "scalar",
+    },
+    "trajectory_generator": {
+        "epsilon": 0.1,
     },
     "visibility": {
         "visibility": "full",
@@ -66,29 +72,51 @@ config = {
         # "(n-1)x(n-1)": All but the outermost ring of the grid is visible.
         "visibility_mask_key": "full",
     },
+    "reward_trainer": {
+        "num_epochs": 3,
+    },
 }
+
+
+# Some validation
+
+if config["feedback"]["type"] != "scalar":
+    raise NotImplementedError("Only scalar feedback is supported at the moment.")
+
+if config["visibility"]["visibility"] == "full" and config["visibility"]["visibility_mask_key"] != "full":
+    raise ValueError(
+        f'If visibility is "full", then visibility mask key must be "full".'
+        f'Instead, it is {wandb.config["visibility"]["visibility_mask_key"]}.'
+    )
+
+if config["visibility"]["visibility"] not in ["full", "partial"]:
+    raise ValueError(
+        f'Unknown visibility {wandb.config["visibility"]["visibility"]}.' f'Visibility must be "full" or "partial".'
+    )
+
+if config["reward_model"]["type"] != "NonImageCnnRewardNet":
+    raise ValueError(f'Unknown reward model type {wandb.config["reward_model"]["type"]}.')
+
+available_visibility_mask_keys = ["full", "(n-1)x(n-1)"]
+if config["visibility"]["visibility_mask_key"] not in available_visibility_mask_keys:
+    raise ValueError(
+        f'Unknown visibility mask key {wandb.config["visibility"]["visibility_mask_key"]}.'
+        f"Available visibility mask keys are {available_visibility_mask_keys}."
+    )
+
+if config["fragment_length"] == None:
+    config["fragment_length"] = config["environment"]["horizon"]
 
 wandb.login()
 run = wandb.init(
     project="assisting-bounded-humans",
-    notes="trying to log more stuff including the config",
-    name="setup_debug_3",
+    notes="finalizing logging pipeline for now",
+    name="setup_debug_4",
     tags=[
         "debug",
     ],
     config=config,
 )
-
-
-if wandb.config["feedback"]["type"] != "scalar":
-    raise NotImplementedError("Only scalar feedback is supported at the moment.")
-
-
-if wandb.config["visibility"]["visibility"] == "full" and wandb.config["visibility"]["visibility_mask_key"] != "full":
-    raise ValueError(
-        f'If visibility is "full", then visibility mask key must be "full".'
-        f'Instead, it is {wandb.config["visibility"]["visibility_mask_key"]}.'
-    )
 
 
 def construct_visibility_mask(grid_size, visibility_mask_key):
@@ -115,10 +143,6 @@ env = StealingGridworld(
 )
 
 
-if wandb.config["reward_model"]["type"] != "NonImageCnnRewardNet":
-    raise ValueError(f'Unknown reward model type {wandb.config["reward_model"]["type"]}.')
-
-
 reward_net = NonImageCnnRewardNet(
     env.observation_space,
     env.action_space,
@@ -137,7 +161,7 @@ fragmenter = RandomSingleFragmenter(rng=rng)
 gatherer = SyntheticScalarFeedbackGatherer(rng=rng)
 
 
-if wandb.config["visibility"]["visibility"] != "full":
+if wandb.config["visibility"]["visibility"] == "partial":
     visibility_mask = construct_visibility_mask(
         wandb.config["environment"]["grid_size"],
         wandb.config["visibility"]["visibility_mask_key"],
@@ -147,22 +171,20 @@ if wandb.config["visibility"]["visibility"] != "full":
     policy_evaluator = partial_visibility_evaluator_factory(visibility_mask)
 elif wandb.config["visibility"]["visibility"] == "full":
     policy_evaluator = full_visibility_evaluator_factory()
-else:
-    raise ValueError(f'Unknown visibility {wandb.config["visibility"]}.')
 
 
 feedback_model = ScalarFeedbackModel(model=reward_net)
 reward_trainer = BasicScalarFeedbackRewardTrainer(
     feedback_model=feedback_model,
-    loss=MSERewardLoss(),
+    loss=MSERewardLoss(),  # Will need to change this for preference learning
     rng=rng,
-    epochs=3,
+    epochs=wandb.config["reward_trainer"]["num_epochs"],
 )
 trajectory_generator = DeterministicMDPTrajGenerator(
     reward_fn=reward_net,
     env=env,
     rng=None,  # This doesn't work yet
-    epsilon=0.1,
+    epsilon=wandb.config["trajectory_generator"]["epsilon"],
 )
 logger = imit_logger.configure(format_strs=["stdout", "wandb"])
 
@@ -191,8 +213,8 @@ reward_learner = ScalarRewardLearner(
     feedback_queue_size=wandb.config["dataset_max_size"],
     reward_trainer=reward_trainer,
     fragment_length=wandb.config["fragment_length"],
-    transition_oversampling=5,
-    initial_epoch_multiplier=1,
+    transition_oversampling=wandb.config["transition_oversampling"],
+    initial_epoch_multiplier=wandb.config["initial_epoch_multiplier"],
     policy_evaluator=policy_evaluator,
     custom_logger=logger,
     callback=save_model_params_and_dataset_callback,
