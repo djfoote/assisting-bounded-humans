@@ -1,3 +1,14 @@
+# Presentation materials
+notebooks/images
+notebooks/videos
+
+# Model checkpoints and wandb logs
+saved_reward_models
+wandb
+
+# Mac
+.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -1,6 +1,8 @@
 import abc
 import itertools
 import pickle
+import re
+import time
 from typing import Any, Dict, Tuple
 
 import numpy as np
@@ -233,11 +235,11 @@ class ScalarFeedbackDataset(data_th.Dataset):
     def __len__(self):
         assert len(self.fragments) == len(self.reward_labels)
         return len(self.reward_labels)
-    
+
     def save(self, filename):
-        with open(filename, 'wb') as f:
+        with open(filename, "wb") as f:
             pickle.dump(self, f)
-        
+
 
 class RandomSingleFragmenter(preference_comparisons.RandomFragmenter):
     """Fragmenter that samples single fragments rather than fragment pairs.
@@ -414,29 +416,48 @@ class BasicScalarFeedbackRewardTrainer(ScalarFeedbackRewardTrainer):
         dataloader = self._make_data_loader(dataset)
         epochs = np.round(self.epochs * epoch_multiplier).astype(int)
         assert epochs > 0, "Must train for at least one epoch."
-
-        for _ in tqdm(range(epochs), desc="Training reward model"):
-            train_loss = 0.0
-            accumulated_size = 0
-            self.optim.zero_grad()
-            for fragments, feedback in dataloader:
-                loss = self._training_inner_loop(fragments, np.array(feedback))
-                loss *= len(fragments) / self.batch_size  # rescale loss to account for minibatching
-                train_loss += loss.item()
-                loss.backward()
-                accumulated_size += len(fragments)
-                if accumulated_size >= self.batch_size:
-                    self.optim.step()
-                    self.optim.zero_grad()
+        with self.logger.accumulate_means("reward"):
+            for epoch_num in tqdm(range(epochs), desc="Training reward model"):
+                with self.logger.add_key_prefix(f"epoch-{epoch_num}"):
+                    train_loss = 0.0
                     accumulated_size = 0
-            if accumulated_size > 0:
-                self.optim.step()  # if there remains an incomplete batch
+                    self.optim.zero_grad()
+                    for fragments, feedback in dataloader:
+                        with self.logger.add_key_prefix("train"):
+                            loss = self._training_inner_loop(fragments, np.array(feedback))
+                            loss *= len(fragments) / self.batch_size  # rescale loss to account for minibatching
+                        train_loss += loss.item()
+                        loss.backward()
+                        accumulated_size += len(fragments)
+                        if accumulated_size >= self.batch_size:
+                            self.optim.step()
+                            self.optim.zero_grad()
+                            accumulated_size = 0
+                    if accumulated_size > 0:
+                        self.optim.step()  # if there remains an incomplete batch
+
+        # after training all the epochs,
+        # record also the final value in a separate key for easy access.
+        keys = list(self.logger.name_to_value.keys())
+        outer_prefix = self.logger.get_accumulate_prefixes()
+        for key in keys:
+            base_path = f"{outer_prefix}reward/"  # existing prefix + accum_means ctx
+            epoch_path = f"mean/{base_path}epoch-{epoch_num}/"  # mean for last epoch
+            final_path = f"{base_path}final/"  # path to record last epoch
+            pattern = rf"{epoch_path}(.+)"
+            if regex_match := re.match(pattern, key):
+                (key_name,) = regex_match.groups()
+                val = self.logger.name_to_value[key]
+                new_key = f"{final_path}{key_name}"
+                self.logger.record(new_key, val)
 
     def _training_inner_loop(self, fragments, feedback):
         """Inner loop of training, for a single minibatch."""
-        # The imitation implementation returns a NamedTuple where `loss` has to be unpacked.
-        # I've decided to skip all that for now.
-        return self.loss.forward(fragments, feedback, self._feedback_model)
+        # The imitation implementation returns a NamedTuple where `loss` has to be unpacked. This is to pass accuracy
+        # through in addition to loss for logging. I've decided to skip all that for now.
+        loss = self.loss.forward(fragments, feedback, self._feedback_model)
+        self.logger.record("loss", loss)
+        return loss
 
 
 class ScalarRewardLearner(base.BaseImitationAlgorithm):
@@ -461,6 +482,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
         initial_epoch_multiplier=200.0,
         custom_logger=None,
         query_schedule="hyperbolic",
+        policy_evaluator=None,
         callback=None,
     ):
         super().__init__(custom_logger=custom_logger, allow_variable_horizon=False)
@@ -496,6 +518,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
 
         self.dataset = ScalarFeedbackDataset(max_size=feedback_queue_size)
 
+        self.policy_evaluator = policy_evaluator
         self.callback = callback
 
     def train(self, total_timesteps, total_queries):
@@ -512,10 +535,12 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
 
         timesteps_per_iteration, extra_timesteps = divmod(total_timesteps, self.num_iterations)
         reward_loss = None
-        reward_accuracy = None
 
         for i, num_queries in enumerate(schedule):
-            self.logger.log(f"Beggining iteration {i} of {self.num_iterations}")
+            iter_log_str = f"Beginning iteration {i} of {self.num_iterations}"
+            if self._iteration != i:
+                iter_log_str += f" (global iteration {self._iteration})"
+            self.logger.log(iter_log_str)
 
             #######################
             # Gather new feedback #
@@ -533,8 +558,8 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
             self.logger.log("Gathering feedback")
             feedback = self.feedback_gatherer(fragments)
             self.dataset.push(fragments, feedback)
-            print(f"Best reward: {np.max(feedback)} | Worst reward: {np.min(feedback)}")
             self.logger.log(f"Dataset now contains {len(self.dataset.reward_labels)} feedback queries")
+            self.logger.record(f"dataset_size", len(self.dataset.reward_labels))
 
             ######################
             # Train reward model #
@@ -542,7 +567,15 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
 
             # On the first iteration, we train the reward model for longer, as specified by initial_epoch_multiplier.
             epoch_multiplier = self.initial_epoch_multiplier if i == 0 else 1.0
+
+            start_time = time.time()
             self.reward_trainer.train(self.dataset, epoch_multiplier=epoch_multiplier)
+            self.logger.record("reward_train_time", time.time() - start_time)
+
+            base_key = self.logger.get_accumulate_prefixes() + "reward/final/train"
+            assert f"{base_key}/loss" in self.logger.name_to_value
+            reward_loss = self.logger.name_to_value[f"{base_key}/loss"]
+            self.logger.record("reward_loss", reward_loss)
 
             ###################
             # Train the agent #
@@ -557,6 +590,21 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
             self.logger.log(f"Training agent for {num_steps} timesteps")
             self.trajectory_generator.train(steps=num_steps)
 
+            ###################
+            # Log information #
+            ###################
+
+            if self.policy_evaluator is not None:
+                with networks.evaluating(self.model):
+                    prop_bad, prop_bad_per_condition = self.policy_evaluator.evaluate(
+                        policy=self.trajectory_generator.policy,
+                        env=self.trajectory_generator.env,
+                        num_trajs=1000,
+                    )
+                    self.logger.record("policy_behavior/prop_bad_rollouts", prop_bad)
+                    for condition, prop in prop_bad_per_condition.items():
+                        self.logger.record(f"policy_behavior/prop_bad_rollouts_{condition}", prop)
+
             self.logger.dump(self._iteration)
 
             if self.callback is not None:
@@ -564,4 +612,4 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
 
             self._iteration += 1
 
-        return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}
+        return {"reward_loss": reward_loss}
