@@ -1,6 +1,5 @@
 # Presentation materials
-notebooks/images
-notebooks/videos
+presentation
 
 # Model checkpoints and wandb logs
 saved_reward_models
