@@ -1,0 +1,23 @@
+[project]
+name = "assisting-bounded-humans"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Juell Sprott", email = "juell.sprott@student.uva.nl" }
+]
+dependencies = [
+    "tqdm>=4.66.2",
+    "gymnasium>=0.29.1",
+    "imitation>=1.0.0",
+    "wandb>=0.16.6",
+    "",
+    "stable-baselines3>=2.3.1",
+    "numpy>=1.26.4",
+]
+readme = "README.md"
+requires-python = ">= 3.11"
+
+[tool.rye]
+managed = true
+virtual = true
+dev-dependencies = []

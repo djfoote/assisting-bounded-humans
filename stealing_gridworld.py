@@ -97,7 +97,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         self.steps = 0
 
-        return self._get_observation()
+        return self._get_observation(), {}
 
     def step(self, action):
         self.steps += 1

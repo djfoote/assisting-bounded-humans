@@ -19,6 +19,7 @@ from torch.utils import data as data_th
 from tqdm.auto import tqdm
 
 import value_iteration
+from stable_baselines3 import PPO
 
 
 class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
@@ -43,7 +44,7 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
         self.max_vi_steps = max_vi_steps
 
         # TODO: Can I just pass `rng` to np.random.seed like this?
-        self.policy = value_iteration.RandomPolicy(self.env, self.rng)
+        self.policy = PPO("MlpPolicy", env, verbose=1) #value_iteration.RandomPolicy(self.env, self.rng)
 
     def sample(self, steps):
         """
@@ -56,6 +57,7 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
                 self.policy,
                 fixed_horizon=self.max_vi_steps,
                 epsilon=self.epsilon,
+                render=True,
             )
             trajectories.append(trajectory)
             total_steps += len(trajectory)
@@ -66,10 +68,14 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
         Find the optimal policy using value iteration under the given reward function.
         Overrides the train method as required for imitation.preference_comparisons.
         """
-        vi_steps = min(steps, self.max_vi_steps)
-        self.policy = value_iteration.get_optimal_policy(
-            self.env, gamma=self.vi_gamma, horizon=vi_steps, alt_reward_fn=self.reward_fn
-        )
+        
+        # replace value iteration with PPO training
+        self.policy.learn(total_timesteps=steps)
+        self.policy.save("PPOStealingGridWorldPolicy")
+        # vi_steps = min(steps, self.max_vi_steps)
+        # self.policy = value_iteration.get_optimal_policy(
+        #     self.env, gamma=self.vi_gamma, horizon=vi_steps, alt_reward_fn=self.reward_fn
+        # )
 
 
 class NonImageCnnRewardNet(RewardNet):
