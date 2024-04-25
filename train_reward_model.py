@@ -29,9 +29,9 @@ from stealing_gridworld import PartialGridVisibility, StealingGridworld
 #######################################################################################################################
 
 
-GPU_NUMBER = None
-N_ITER = 20
-N_COMPARISONS = 10_000
+GPU_NUMBER = 1
+N_ITER = 40
+N_COMPARISONS = 30_000
 
 
 #######################################################################################################################
@@ -54,34 +54,34 @@ config = {
         "kernel_size": 3,
     },
     "seed": 0,
-    "dataset_max_size": 10_000,
+    "dataset_max_size": 30_000,
     # If fragment_length is None, then the whole trajectory is used as a single fragment.
-    "fragment_length": None,
+    "fragment_length": 10,
     "transition_oversampling": 10,
-    "initial_epoch_multiplier": 1,
+    "initial_epoch_multiplier": 1.0,
     "feedback": {
-        "type": "scalar",
+        "type": "preference",
     },
     "trajectory_generator": {
         "epsilon": 0.1,
     },
     "visibility": {
-        "visibility": "full",
+        "visibility": "partial",
         # Available visibility mask keys:
         # "full": All of the grid is visible. Not actually used, but should be set for easier comparison.
         # "(n-1)x(n-1)": All but the outermost ring of the grid is visible.
-        "visibility_mask_key": "full",
+        "visibility_mask_key": "(n-1)x(n-1)",
     },
     "reward_trainer": {
-        "num_epochs": 3,
+        "num_epochs": 5,
     },
 }
 
 
 # Some validation
 
-if config["feedback"]["type"] != "scalar":
-    raise NotImplementedError("Only scalar feedback is supported at the moment.")
+if config["feedback"]["type"] not in ("scalar", "preference"):
+    raise NotImplementedError("Only scalar and preference feedback are supported at the moment.")
 
 if config["visibility"]["visibility"] == "full" and config["visibility"]["visibility_mask_key"] != "full":
     raise ValueError(
@@ -106,14 +106,16 @@ if config["visibility"]["visibility_mask_key"] not in available_visibility_mask_
 
 if config["fragment_length"] == None:
     config["fragment_length"] = config["environment"]["horizon"]
+    print("Fragment length unspecified... setting it to ", config["environment"]["horizon"])
 
 wandb.login()
 run = wandb.init(
     project="assisting-bounded-humans",
-    notes="finalizing logging pipeline for now",
-    name="setup_debug_4",
+    notes="Testing the preference comparisons model",
+    name="PO_preference_comp_3",
     tags=[
-        "debug",
+        "test",
+        "Partial Observability"
     ],
     config=config,
 )
@@ -153,39 +155,57 @@ reward_net = NonImageCnnRewardNet(
 rng = np.random.default_rng(wandb.config["seed"])
 
 if GPU_NUMBER is not None:
-    device = th.device(f"cuda:{GPU_NUMBER}" if th.cuda.is_available() else "cpu")
+    device = th.device(f"cuda:{GPU_NUMBER}" if th.cuda.is_available() else "mps")
     reward_net.to(device)
     print(f"Reward net on {device}.")
 
-fragmenter = RandomSingleFragmenter(rng=rng)
-gatherer = SyntheticScalarFeedbackGatherer(rng=rng)
-
+if config["feedback"]["type"] == 'scalar':
+    fragmenter = RandomSingleFragmenter(rng=rng)
+    gatherer = SyntheticScalarFeedbackGatherer(rng=rng)
+else:
+    fragmenter = preference_comparisons.RandomFragmenter(rng=rng)
+    gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
 
 if wandb.config["visibility"]["visibility"] == "partial":
     visibility_mask = construct_visibility_mask(
         wandb.config["environment"]["grid_size"],
         wandb.config["visibility"]["visibility_mask_key"],
     )
-    observation_function = PartialGridVisibility(env, visibility_mask=visibility_mask)
+    observation_function = PartialGridVisibility(env, visibility_mask=visibility_mask, feedback=config["feedback"]["type"])
     gatherer = NoisyObservationGathererWrapper(gatherer, observation_function)
     policy_evaluator = partial_visibility_evaluator_factory(visibility_mask)
 elif wandb.config["visibility"]["visibility"] == "full":
     policy_evaluator = full_visibility_evaluator_factory()
 
+if config["feedback"]["type"] == 'scalar':
+    feedback_model = ScalarFeedbackModel(model=reward_net)
+    reward_trainer = BasicScalarFeedbackRewardTrainer(
+        feedback_model=feedback_model,
+        loss=MSERewardLoss(),  # Will need to change this for preference learning
+        #loss=preference_comparisons.CrossEntropyRewardLoss(),
+        rng=rng,
+        epochs=wandb.config["reward_trainer"]["num_epochs"],
+    )
 
-feedback_model = ScalarFeedbackModel(model=reward_net)
-reward_trainer = BasicScalarFeedbackRewardTrainer(
-    feedback_model=feedback_model,
-    loss=MSERewardLoss(),  # Will need to change this for preference learning
-    rng=rng,
-    epochs=wandb.config["reward_trainer"]["num_epochs"],
-)
+else:
+    feedback_model = preference_comparisons.PreferenceModel(reward_net)
+    reward_trainer = preference_comparisons.BasicRewardTrainer(
+        preference_model=feedback_model,
+        loss=preference_comparisons.CrossEntropyRewardLoss(),
+        rng=rng,
+        epochs=wandb.config["reward_trainer"]["num_epochs"],
+    )
+
+### I think that as long as we are in ValueIteration, this can stay like this?
 trajectory_generator = DeterministicMDPTrajGenerator(
     reward_fn=reward_net,
     env=env,
     rng=None,  # This doesn't work yet
     epsilon=wandb.config["trajectory_generator"]["epsilon"],
 )
+
+
+
 logger = imit_logger.configure(format_strs=["stdout", "wandb"])
 
 
@@ -203,31 +223,57 @@ def save_model_params_and_dataset_callback(reward_learner):
     reward_learner.dataset.save(latest_dataset_path)
     reward_learner.dataset.save(dataset_iter_path)
 
+if config["feedback"]["type"] == 'scalar':
+    reward_learner = ScalarRewardLearner(
+        trajectory_generator=trajectory_generator,
+        reward_model=reward_net,
+        num_iterations=N_ITER,
+        fragmenter=fragmenter,
+        feedback_gatherer=gatherer,
+        feedback_queue_size=wandb.config["dataset_max_size"],
+        reward_trainer=reward_trainer,
+        fragment_length=wandb.config["fragment_length"],
+        transition_oversampling=wandb.config["transition_oversampling"],
+        initial_epoch_multiplier=wandb.config["initial_epoch_multiplier"],
+        policy_evaluator=policy_evaluator,
+        custom_logger=logger,
+        callback=save_model_params_and_dataset_callback,
+    )
 
-reward_learner = ScalarRewardLearner(
-    trajectory_generator=trajectory_generator,
-    reward_model=reward_net,
-    num_iterations=N_ITER,
-    fragmenter=fragmenter,
-    feedback_gatherer=gatherer,
-    feedback_queue_size=wandb.config["dataset_max_size"],
-    reward_trainer=reward_trainer,
-    fragment_length=wandb.config["fragment_length"],
-    transition_oversampling=wandb.config["transition_oversampling"],
-    initial_epoch_multiplier=wandb.config["initial_epoch_multiplier"],
-    policy_evaluator=policy_evaluator,
-    custom_logger=logger,
-    callback=save_model_params_and_dataset_callback,
-)
-
+else:
+    reward_learner = preference_comparisons.PreferenceComparisons(
+        trajectory_generator=trajectory_generator,
+        reward_model=reward_net,
+        num_iterations=N_ITER,
+        fragmenter=fragmenter,
+        preference_gatherer=gatherer,
+        comparison_queue_size=wandb.config["dataset_max_size"],
+        reward_trainer=reward_trainer,
+        fragment_length=wandb.config["fragment_length"],
+        transition_oversampling=wandb.config["transition_oversampling"],
+        initial_epoch_multiplier=wandb.config["initial_epoch_multiplier"],
+        initial_comparison_frac=0.1,
+        #query_schedule="hyperbolic",
+        policy_evaluator=policy_evaluator,
+        custom_logger=logger,
+    )
 
 #######################################################################################################################
 ####################################################### Training ######################################################
 #######################################################################################################################
 
+if config["feedback"]["type"] == 'scalar':
+    result = reward_learner.train(
+        # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
+        total_timesteps=10 * N_ITER * wandb.config["environment"]["horizon"],
+        total_queries=N_COMPARISONS,
+    )
 
-result = reward_learner.train(
-    # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
-    total_timesteps=10 * N_ITER * wandb.config["environment"]["horizon"],
-    total_queries=N_COMPARISONS,
-)
+else:
+    result = reward_learner.train(
+        # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
+        total_timesteps=10 * N_ITER * wandb.config["environment"]["horizon"],
+        total_comparisons=N_COMPARISONS,
+        callback=save_model_params_and_dataset_callback,
+    )
+    

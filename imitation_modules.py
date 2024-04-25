@@ -483,7 +483,6 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
         custom_logger=None,
         query_schedule="hyperbolic",
         policy_evaluator=None,
-        callback=None,
     ):
         super().__init__(custom_logger=custom_logger, allow_variable_horizon=False)
 
@@ -519,7 +518,6 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
         self.dataset = ScalarFeedbackDataset(max_size=feedback_queue_size)
 
         self.policy_evaluator = policy_evaluator
-        self.callback = callback
 
     def train(self, total_timesteps, total_queries):
         initial_queries = int(self.initial_feedback_frac * total_queries)

@@ -125,7 +125,7 @@ def get_aberrant_trajs_for_model(policy, env, num_trajs=100, verbose=False):
 
 
 def get_proportion_of_aberrant_trajectories(policy, env, num_trajs=100):
-    _, aberrant_trajectory_idxs = get_aberrant_trajs_for_model(policy, env, num_trajs)
+    _, aberrant_trajectory_idxs = get_aberrant_trajs_for_model(policy, env, num_trajs, verbose=True)
     return len(aberrant_trajectory_idxs) / num_trajs
 
 
