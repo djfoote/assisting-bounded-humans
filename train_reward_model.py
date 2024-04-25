@@ -6,7 +6,8 @@ import time
 
 import numpy as np
 import torch as th
-from imitation.algorithms import preference_comparisons
+#from imitation.algorithms import preference_comparisons                # It needed some modifications... Patched and imported in the following line
+import preference_comparisons_patch as preference_comparisons
 from imitation.util import logger as imit_logger
 
 import wandb
@@ -155,7 +156,7 @@ reward_net = NonImageCnnRewardNet(
 rng = np.random.default_rng(wandb.config["seed"])
 
 if GPU_NUMBER is not None:
-    device = th.device(f"cuda:{GPU_NUMBER}" if th.cuda.is_available() else "mps")
+    device = th.device(f"cuda:{GPU_NUMBER}" if th.cuda.is_available() else "mps" if th.backends.mps.is_available() else 'cpu')
     reward_net.to(device)
     print(f"Reward net on {device}.")
 
