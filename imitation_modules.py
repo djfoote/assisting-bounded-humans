@@ -57,7 +57,7 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
                 self.policy,
                 fixed_horizon=self.max_vi_steps,
                 epsilon=self.epsilon,
-                render=True,
+                render=False,
             )
             trajectories.append(trajectory)
             total_steps += len(trajectory)
@@ -594,7 +594,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
                 num_steps += extra_timesteps
 
             self.logger.log(f"Training agent for {num_steps} timesteps")
-            self.trajectory_generator.train(steps=num_steps)
+            self.trajectory_generator.train(steps=num_steps*10)
 
             ###################
             # Log information #

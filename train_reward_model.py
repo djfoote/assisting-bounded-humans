@@ -111,7 +111,7 @@ wandb.login()
 run = wandb.init(
     project="assisting-bounded-humans",
     notes="finalizing logging pipeline for now",
-    name="setup_debug_4",
+    name="PPO_FO_run-multiplied_steps",
     tags=[
         "debug",
     ],

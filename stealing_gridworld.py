@@ -125,8 +125,12 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         # Compute done
         done = self.steps >= self.max_steps
+        # sb3 requires both truncated and done
+        # truncated is typically for if the goal is reached so...
+        # TODO: implement a goal?
+        truncated = done
 
-        return self._get_observation(), reward, done, {}
+        return self._get_observation(), reward, truncated, done, {}
 
     def successor(self, state, action):
         """
@@ -134,7 +138,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         """
         prev_state = self._get_observation()
         self._register_state(state)
-        successor_state, reward, _, _ = self.step(action)
+        successor_state, reward, _, _, _ = self.step(action)
         self._register_state(prev_state)
         return successor_state, reward
 
@@ -143,7 +147,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         Returns the reward for a given state and action.
         """
         self._register_state(state)
-        _, reward, _, _ = self.step(action)
+        _, reward, _, _, _ = self.step(action)
 
         return reward
 
@@ -399,7 +403,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                     else:
                         action = policy.predict(self._get_observation())
 
-            obs, reward, done, _ = self.step(action)
+            obs, reward, done, _, _ = self.step(action)
             total_reward += reward
             print("Reward: {}".format(reward))
             print()

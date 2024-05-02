@@ -254,7 +254,7 @@ class DeterministicMDP(abc.ABC):
             else:
                 action = policy.predict(state)
                 action = action[0] if isinstance(action, tuple) else action
-            next_state, reward, done, _ = self.step(self.get_action_index(action))
+            next_state, reward, _, done, _ = self.step(self.get_action_index(action))
             if logging_callback is not None:
                 logging_callback(state, action, reward)
             states.append(next_state)
