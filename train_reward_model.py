@@ -26,6 +26,7 @@ from imitation_modules import (
     CrossEntropyRewardLoss,
     SyntheticGatherer,
     RandomFragmenter,
+    PreferenceComparisonNoisyObservationGathererWrapper,
 )
 
 from stealing_gridworld import PartialGridVisibility, StealingGridworld
@@ -35,8 +36,8 @@ from stealing_gridworld import PartialGridVisibility, StealingGridworld
 #######################################################################################################################
 
 
-GPU_NUMBER = 1
-N_ITER = 40
+GPU_NUMBER = 0
+N_ITER = 10
 N_COMPARISONS = 30_000
 
 
@@ -83,7 +84,6 @@ config = {
     },
 }
 
-
 # Some validation
 
 if config["feedback"]["type"] not in ("scalar", "preference"):
@@ -127,15 +127,22 @@ run = wandb.init(
 )
 
 
-def construct_visibility_mask(grid_size, visibility_mask_key):
+def construct_visibility_mask(grid_size, visibility_mask_key, *args, **kwargs):
     # Any other visibility mask keys should be added here.
     if visibility_mask_key == "(n-1)x(n-1)":
         visibility_mask = np.zeros((grid_size, grid_size), dtype=np.bool_)
         visibility_mask[1:-1, 1:-1] = True
         return visibility_mask
+    elif visibility_mask_key == "camera":
+        mask = np.zeros((grid_size, grid_size), dtype=np.bool_)
+        start_row = max(0, args.center[0] - 1)
+        start_col = max(0, args.center[1] - 1)
+        end_row = min(grid_size, args.center[0] + 2)
+        end_col = min(grid_size, args.center[1] + 2)
+        mask[start_row:end_row, start_col:end_col] = True
     else:
         raise ValueError(f"Unknown visibility mask key {visibility_mask_key}.")
-
+    
 
 #######################################################################################################################
 ################################################## Create everything ##################################################
@@ -178,7 +185,12 @@ if wandb.config["visibility"]["visibility"] == "partial":
         wandb.config["visibility"]["visibility_mask_key"],
     )
     observation_function = PartialGridVisibility(env, visibility_mask=visibility_mask, feedback=config["feedback"]["type"])
-    gatherer = NoisyObservationGathererWrapper(gatherer, observation_function)
+
+    if wandb.config["feedback"]["type"] == 'scalar':
+        gatherer = NoisyObservationGathererWrapper(gatherer, observation_function)
+    elif wandb.config["feedback"]["type"] == 'preference':
+        gatherer = PreferenceComparisonNoisyObservationGathererWrapper(gatherer, observation_function)
+
     policy_evaluator = partial_visibility_evaluator_factory(visibility_mask)
 elif wandb.config["visibility"]["visibility"] == "full":
     policy_evaluator = full_visibility_evaluator_factory()

@@ -435,12 +435,86 @@ def separate_image_and_categorical_state(
     return image, categorical
 
 
-class PartialGridVisibility(ObservationFunction):
-    def __init__(self, env: StealingGridworld, visibility_mask=None ,feedback="scalar"):
-        self.env = env
+# class PartialGridVisibility(ObservationFunction):
+#     def __init__(self, env: StealingGridworld, visibility_mask=None ,feedback="scalar"):
+#         self.env = env
 
+#         if visibility_mask is None:
+#             # Default visibility mask: everything except the outermost ring.
+#             if env.grid_size < 3:
+#                 raise ValueError(
+#                     "Grid size must be at least 3 for default partial visibility. "
+#                     "Increase grid size or specify visibility mask explicitly."
+#                 )
+#             visibility_mask = np.ones((env.grid_size, env.grid_size), dtype=np.bool)
+#             visibility_mask[0, :] = visibility_mask[-1, :] = visibility_mask[:, 0] = visibility_mask[:, -1] = False
+
+#         self.visibility_mask = visibility_mask
+#         self.feedback = feedback
+
+#     def __call__(self, fragment):
+#         # Mask out all but the number of pellets the agent is carrying (spatial representation is fake in that case).
+#         if self.feedback == "scalar":
+#             masked_obs = fragment.obs[:, :-1] * self.visibility_mask[np.newaxis, np.newaxis]
+#             new_obs = np.concatenate([masked_obs, fragment.obs[:, -1:]], axis=1)
+
+#             # For timesteps where the agent is not in the visibility mask, set reward to 0.
+#             agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
+#             new_rew = fragment.rews * agent_visible
+
+#             return TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, new_rew)
+        
+#         elif self.feedback == "preference":
+#             fragments = []
+#             for f in fragment: 
+#                 masked_obs = f.obs[:, :-1] * self.visibility_mask[np.newaxis, np.newaxis]
+#                 new_obs = np.concatenate([masked_obs, f.obs[:, -1:]], axis=1)
+#                 agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
+#                 new_rew = f.rews * agent_visible
+#                 fragments.append(TrajectoryWithRew(new_obs, f.acts, f.infos, f.terminal, new_rew))
+            
+#             return (fragments[0], fragments[1])
+
+#         else:
+#             raise ValueError(
+#                     "Unsupported feedback type for Partial Observability"
+#                     "Choose between 'scalar' and 'preference'."
+#                 )
+
+
+#             #     # For timesteps where the agent is not in the visibility mask, set reward to 0.
+#             #     agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
+#             #     new_rew = f.rews * agent_visible
+
+
+#             #     traj = self.rng.choice(
+#             #     trajectories,  # type: ignore[arg-type]
+#             #     p=np.array(weights) / sum(weights),
+#             #     )
+#             #     n = len(traj)
+#             #     start = self.rng.integers(0, n - fragment_length, endpoint=True)
+#             #     end = start + fragment_length
+#             #     terminal = (end == n) and traj.terminal
+#             #     fragment = TrajectoryWithRew(
+#             #         obs=traj.obs[start : end + 1],
+#             #         acts=traj.acts[start:end],
+#             #         infos=traj.infos[start:end] if traj.infos is not None else None,
+#             #         rews=traj.rews[start:end],
+#             #         terminal=terminal,
+#             #     )
+#             #     fragments.append(fragment)
+#             # # fragments is currently a list of single fragments. We want to pair up
+#             # # fragments to get a list of (fragment1, fragment2) tuples. To do so,
+#             # # we create a single iterator of the list and zip it with itself:
+#             # iterator = iter(fragments)
+#             # return list(zip(iterator, iterator))
+
+
+class PartialGridVisibility(ObservationFunction):
+    def __init__(self, env: StealingGridworld, visibility_mask=None, feedback="scalar"):
+        self.env = env
+        
         if visibility_mask is None:
-            # Default visibility mask: everything except the outermost ring.
             if env.grid_size < 3:
                 raise ValueError(
                     "Grid size must be at least 3 for default partial visibility. "
@@ -452,63 +526,26 @@ class PartialGridVisibility(ObservationFunction):
         self.visibility_mask = visibility_mask
         self.feedback = feedback
 
-    def __call__(self, fragment):
-        # Mask out all but the number of pellets the agent is carrying (spatial representation is fake in that case).
+    def __call__(self, fragments):
         if self.feedback == "scalar":
+            return self.process_scalar_feedback(fragments)
+        elif self.feedback == "preference":
+            return self.process_preference_feedback(fragments)
+
+    def process_scalar_feedback(self, fragment):
+        masked_obs = fragment.obs[:, :-1] * self.visibility_mask[np.newaxis, np.newaxis]
+        new_obs = np.concatenate([masked_obs, fragment.obs[:, -1:]], axis=1)
+        agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
+        new_rew = fragment.rews * agent_visible
+        return TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, new_rew)
+
+    def process_preference_feedback(self, fragment_pair):
+        processed_fragments = []
+        for fragment in fragment_pair:
             masked_obs = fragment.obs[:, :-1] * self.visibility_mask[np.newaxis, np.newaxis]
             new_obs = np.concatenate([masked_obs, fragment.obs[:, -1:]], axis=1)
-
-            # For timesteps where the agent is not in the visibility mask, set reward to 0.
             agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
             new_rew = fragment.rews * agent_visible
-
-            return TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, new_rew)
-        
-        elif self.feedback == "preference":
-            fragments = []
-            for f in fragment: 
-                masked_obs = f.obs[:, :-1] * self.visibility_mask[np.newaxis, np.newaxis]
-                new_obs = np.concatenate([masked_obs, f.obs[:, -1:]], axis=1)
-                agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
-                new_rew = f.rews * agent_visible
-                fragments.append(TrajectoryWithRew(new_obs, f.acts, f.infos, f.terminal, new_rew))
-            
-            return (fragments[0], fragments[1])
-
-        else:
-            raise ValueError(
-                    "Unsupported feedback type for Partial Observability"
-                    "Choose between 'scalar' and 'preference'."
-                )
-
-
-            #     # For timesteps where the agent is not in the visibility mask, set reward to 0.
-            #     agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
-            #     new_rew = f.rews * agent_visible
-
-
-            #     traj = self.rng.choice(
-            #     trajectories,  # type: ignore[arg-type]
-            #     p=np.array(weights) / sum(weights),
-            #     )
-            #     n = len(traj)
-            #     start = self.rng.integers(0, n - fragment_length, endpoint=True)
-            #     end = start + fragment_length
-            #     terminal = (end == n) and traj.terminal
-            #     fragment = TrajectoryWithRew(
-            #         obs=traj.obs[start : end + 1],
-            #         acts=traj.acts[start:end],
-            #         infos=traj.infos[start:end] if traj.infos is not None else None,
-            #         rews=traj.rews[start:end],
-            #         terminal=terminal,
-            #     )
-            #     fragments.append(fragment)
-            # # fragments is currently a list of single fragments. We want to pair up
-            # # fragments to get a list of (fragment1, fragment2) tuples. To do so,
-            # # we create a single iterator of the list and zip it with itself:
-            # iterator = iter(fragments)
-            # return list(zip(iterator, iterator))
-
-
-
+            processed_fragments.append(TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, new_rew))
+        return tuple(processed_fragments)
         

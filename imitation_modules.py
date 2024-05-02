@@ -350,6 +350,44 @@ class NoisyObservationGathererWrapper(ScalarFeedbackGatherer):
         return self.wrapped_gatherer(noisy_fragments)
 
 
+class PreferenceComparisonNoisyObservationGathererWrapper(preference_comparisons.PreferenceGatherer):
+    """
+    Wraps a preference comparison gatherer to handle the feedback giver seeing noisy observations of state pairs,
+    rather than the true environment state pairs. It processes pairs of fragments through a provided observation
+    function before passing them to the wrapped preference gatherer.
+
+    Args:
+        gatherer (PreferenceGatherer): The preference comparison gatherer to wrap.
+        observe_fn (Callable[[Trajectory], Trajectory]): A function that takes a trajectory and returns a modified
+            trajectory representing a noisy observation of the original.
+    """
+
+    def __init__(self, gatherer, observe_fn):
+        self.wrapped_gatherer = gatherer
+        self.observe_fn = observe_fn
+
+    def __getattr__(self, name):
+        """
+        Delegate attribute access to the wrapped gatherer, unless the attribute is overridden in this wrapper.
+        """
+        return getattr(self.wrapped_gatherer, name)
+
+    def __call__(self, fragment_pairs):
+        """
+        Apply the observation function to each fragment in the pairs, then pass the noisy pairs to the wrapped gatherer.
+
+        Args:
+            fragment_pairs (list of tuple(Trajectory, Trajectory)): A list of pairs of trajectories.
+
+        Returns:
+            np.ndarray: The preference comparisons results (e.g., probabilities or binary decisions) for the noisy pairs.
+        """
+        print('observe_fn', self.observe_fn)
+        print(self.observe_fn.feedback)
+        print('fragment type', type(fragment_pairs))
+        noisy_fragment_pairs = [self.observe_fn((frag1, frag2)) for frag1, frag2 in fragment_pairs]
+        return self.wrapped_gatherer(noisy_fragment_pairs)
+
 class ObservationFunction(abc.ABC):
     """Abstract class for functions that take an observation and return a new observation."""
 
