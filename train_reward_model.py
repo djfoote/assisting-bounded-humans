@@ -1,13 +1,9 @@
 # Copy of code from experiment ipython notebook
 
 import os
-import pickle
-import time
 
 import numpy as np
 import torch as th
-#from imitation.algorithms import preference_comparisons                # It needed some modifications... Patched and imported in the following line
-import preference_comparisons_patch as preference_comparisons
 from imitation.util import logger as imit_logger
 
 import wandb
@@ -23,6 +19,15 @@ from imitation_modules import (
     ScalarRewardLearner,
     SyntheticScalarFeedbackGatherer,
 )
+from imitation_modules import (
+    PreferenceComparisons,
+    PreferenceModel,
+    BasicRewardTrainer,
+    CrossEntropyRewardLoss,
+    SyntheticGatherer,
+    RandomFragmenter,
+)
+
 from stealing_gridworld import PartialGridVisibility, StealingGridworld
 
 #######################################################################################################################
@@ -164,8 +169,8 @@ if config["feedback"]["type"] == 'scalar':
     fragmenter = RandomSingleFragmenter(rng=rng)
     gatherer = SyntheticScalarFeedbackGatherer(rng=rng)
 else:
-    fragmenter = preference_comparisons.RandomFragmenter(rng=rng)
-    gatherer = preference_comparisons.SyntheticGatherer(rng=rng)
+    fragmenter = RandomFragmenter(rng=rng)
+    gatherer = SyntheticGatherer(rng=rng)
 
 if wandb.config["visibility"]["visibility"] == "partial":
     visibility_mask = construct_visibility_mask(
@@ -183,16 +188,15 @@ if config["feedback"]["type"] == 'scalar':
     reward_trainer = BasicScalarFeedbackRewardTrainer(
         feedback_model=feedback_model,
         loss=MSERewardLoss(),  # Will need to change this for preference learning
-        #loss=preference_comparisons.CrossEntropyRewardLoss(),
         rng=rng,
         epochs=wandb.config["reward_trainer"]["num_epochs"],
     )
 
 else:
-    feedback_model = preference_comparisons.PreferenceModel(reward_net)
-    reward_trainer = preference_comparisons.BasicRewardTrainer(
+    feedback_model = PreferenceModel(reward_net)
+    reward_trainer = BasicRewardTrainer(
         preference_model=feedback_model,
-        loss=preference_comparisons.CrossEntropyRewardLoss(),
+        loss=CrossEntropyRewardLoss(),
         rng=rng,
         epochs=wandb.config["reward_trainer"]["num_epochs"],
     )
@@ -242,7 +246,7 @@ if config["feedback"]["type"] == 'scalar':
     )
 
 else:
-    reward_learner = preference_comparisons.PreferenceComparisons(
+    reward_learner = PreferenceComparisons(
         trajectory_generator=trajectory_generator,
         reward_model=reward_net,
         num_iterations=N_ITER,
