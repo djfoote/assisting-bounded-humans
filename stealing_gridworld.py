@@ -1,5 +1,4 @@
 import itertools
-from numba import jit
 from typing import Iterable, Tuple
 
 import gymnasium as gym
@@ -41,6 +40,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         reward_for_stealing=-2,
         horizon=100,
         home_location=None,
+        seed=None,
     ):
         self.grid_size = grid_size
         self.num_free_pellets = num_free_pellets
@@ -80,6 +80,10 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             self.home_location = np.array([self.grid_size // 2, self.grid_size // 2])
         else:  
             self.home_location = home_location
+        
+        self.seed = seed
+        if seed is not None:
+            np.random.seed(seed)
 
         self.reset()
 
@@ -221,7 +225,14 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         image = image[0]  # Remove batch dimension
         categorical = categorical[0][0]  # Remove batch dimension AND categorical dimension (only one categorical var)
 
-        self.agent_position = np.array(np.where(image[0, :, :] == 1)).T[0]
+        #self.agent_position = np.array(np.where(image[0, :, :] == 1)).T[0]
+        self.agent_position = np.array(np.where(image[0, :, :] == 1)).T
+
+        if self.agent_position.size == 0:
+            self.agent_position = None  # Or a default position if appropriate, e.g., [-1, -1]
+        else:
+            self.agent_position = self.agent_position[0]
+
         self.pellet_locations = {
             "free": np.array(np.where(image[1, :, :] == 1)).T,
             "owned": np.array(np.where(image[2, :, :] == 1)).T,
@@ -323,6 +334,35 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             StealingGridworld.INTERACT: "INTERACT",
         }[action]
 
+    # def render(self, state=None):
+    #     """Simple ASCII rendering of the environment."""
+    #     if state is not None:
+    #         prev_state = self._get_observation()
+    #         self._register_state(state)
+    #         self.render()
+    #         self._register_state(prev_state)
+    #         return
+
+    #     HOME = "H"
+    #     OWNED_PELLET = "x"
+    #     FREE_PELLET = "."
+    #     AGENT = str(self.num_carried_pellets)
+
+    #     grid = np.full((self.grid_size, self.grid_size), " ")
+    #     grid[self.home_location[0], self.home_location[1]] = HOME
+    #     grid[self.pellet_locations["owned"][:, 0], self.pellet_locations["owned"][:, 1]] = OWNED_PELLET
+    #     grid[self.pellet_locations["free"][:, 0], self.pellet_locations["free"][:, 1]] = FREE_PELLET
+
+    #     print("+" + "---+" * self.grid_size)
+    #     for i in range(self.grid_size):
+    #         print("|", end="")
+    #         for j in range(self.grid_size):
+    #             if self.agent_position[0] == i and self.agent_position[1] == j:
+    #                 print("{}{} |".format(AGENT, grid[i, j]), end="")
+    #             else:
+    #                 print(" {} |".format(grid[i, j]), end="")
+    #         print("\n+" + "---+" * self.grid_size)
+
     def render(self, state=None):
         """Simple ASCII rendering of the environment."""
         if state is not None:
@@ -346,7 +386,8 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         for i in range(self.grid_size):
             print("|", end="")
             for j in range(self.grid_size):
-                if self.agent_position[0] == i and self.agent_position[1] == j:
+                # Check if agent_position is not None and coordinates match
+                if self.agent_position is not None and self.agent_position[0] == i and self.agent_position[1] == j:
                     print("{}{} |".format(AGENT, grid[i, j]), end="")
                 else:
                     print(" {} |".format(grid[i, j]), end="")
@@ -622,19 +663,22 @@ class DynamicGridVisibility(ObservationFunction):
 
             self.pattern_index = limits[0]
             for _ in range(t):
-                self.pattern_index = (self.pattern_index + 1) % len(self.pattern)
+                self.pattern_index = (self.pattern_index) % len(self.pattern)
                 visibility_masks.append(self.construct_visibility_mask())
+                self.pattern_index += 1
             return np.array(visibility_masks)
         elif t is not None: # For the evaluation case
             visibility_masks = []
             self.reset()
             for _ in range(t):
-                self.pattern_index = (self.pattern_index + 1) % len(self.pattern)
+                self.pattern_index = (self.pattern_index) % len(self.pattern)
                 visibility_masks.append(self.construct_visibility_mask())
+                self.pattern_index += 1
             return np.array(visibility_masks)
         else: # Not sure if this case is needed
-            self.pattern_index = (self.pattern_index + 1) % len(self.pattern)
+            self.pattern_index = (self.pattern_index) % len(self.pattern)
             self.visibility_mask = self.construct_visibility_mask()
+            self.pattern_index += 1
 
     def __call__(self, fragments, limits=None):
         if self.feedback == "scalar":
@@ -653,13 +697,25 @@ class DynamicGridVisibility(ObservationFunction):
         agent_visible = new_obs[:, 0, :, :].any(axis=(1, 2))
         new_rew = fragment.rews * agent_visible
         return TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, new_rew)
-
+    
+    def render_mask(self, mask):
+        """ Render the visibility mask as ASCII in a more detailed and visually consistent manner. """
+        print("+" + "---+" * len(mask))
+        for row in mask:
+            print("|", end="")
+            for cell in row:
+                if cell:
+                    print(" # |", end="")  # Visible areas marked with '#'
+                else:
+                    print("   |", end="")  # Non-visible areas remain blank
+            print("\n+" + "---+" * len(mask))
 
     def process_preference_feedback(self, fragment_pair, limits=None):
         # limits is a list of ((start,end), (start,end)) tuples for a pair of fragments
         # Extract f1 limits from the limits list
         limits_f1 = limits[0]
         limits_f2 = limits[1]
+
         # Put vsibility mask in a dictionary
         visibility_masks_f1 = self.update_visibility(t=len(fragment_pair[0].obs), limits=limits_f1)
         visibility_masks_f2 = self.update_visibility(t=len(fragment_pair[1].obs), limits=limits_f2)
@@ -676,13 +732,58 @@ class DynamicGridVisibility(ObservationFunction):
             # fragment.obs has shape (t, 5, grid_size, grid_size)
             # We need to apply the visibility mask to all channels except the last one
             # The last channel is the number of carried pellets, which should not be masked
-            masked_obs = fragment.obs[:, :-1] * visibility_masks[:, np.newaxis]
-            new_obs = np.concatenate([masked_obs, fragment.obs[:, -1:]], axis=1)
-            # apply the reward modification
-            agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
-            new_rews = fragment.rews * agent_visible           
+
+            # print("Visibility masks for fragment {}:".format(i+1), "over the time steps:")
+            # for t in range(len(visibility_masks)):
+            #     self.render_mask(visibility_masks[t])
+
+            # Debug: find agent position in the observation
+            agent_pos = np.where(fragment.obs[:, 0, :, :] == 1)
+            time_steps = agent_pos[0]
+            x_coords = agent_pos[1]
+            y_coords = agent_pos[2]
+
+            # print("Agent positions at time t:")
+            # start = limits_f1[0]
+            # j = 0
+            # for t, x, y in zip(time_steps, x_coords, y_coords):
+            #     print(f"t = {t} (l = {start + j}) (x={x}, y={y})")
+            #     j += 1
+
             
-            # Store the new observations and rewards in the trajectory data structure
+
+            masked_obs = fragment.obs[:, :-1] * visibility_masks[:, np.newaxis]
+        
+            new_obs = np.concatenate([masked_obs, fragment.obs[:, -1:]], axis=1)
+
+            # Debug: find agent position in the new observation
+            agent_pos = np.where(new_obs[:, 0, :, :] == 1)
+            time_steps = agent_pos[0]
+            x_coords = agent_pos[1]
+            y_coords = agent_pos[2]
+
+            # print("Agent positions at time t:")
+            # start = limits_f1[0]
+            # j = 0
+            # for t, x, y in zip(time_steps, x_coords, y_coords):
+            #     print(f"t = {t} (l = {start + j}) (x={x}, y={y})")
+            #     j += 1
+
+            # apply the reward modification
+            # agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
+            # new_rews = fragment.rews * agent_visible           
+            
+            # # Store the new observations and rewards in the trajectory data structure
+            # new_fragment = TrajectoryWithRew(np.array(new_obs), fragment.acts, fragment.infos, fragment.terminal, np.array(new_rews))
+            # processed_fragments.append(new_fragment)
+            # Debug: Render the observations before and after applying the mask
+            #print("Fragment {} Before Masking:".format(i+1))
+            #self.env.render_rollout(TrajectoryWithRew(fragment.obs, fragment.acts, fragment.infos, fragment.terminal, fragment.rews))
+            #print("Fragment {} After Masking:".format(i+1))
+            #self.env.render_rollout(TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, fragment.rews))
+
+            agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
+            new_rews = fragment.rews * agent_visible
             new_fragment = TrajectoryWithRew(np.array(new_obs), fragment.acts, fragment.infos, fragment.terminal, np.array(new_rews))
             processed_fragments.append(new_fragment)
 

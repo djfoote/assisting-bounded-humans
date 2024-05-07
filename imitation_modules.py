@@ -383,14 +383,12 @@ class PreferenceComparisonNoisyObservationGathererWrapper(preference_comparisons
             np.ndarray: The preference comparisons results (e.g., probabilities or binary decisions) for the noisy pairs.
         """
         #noisy_fragment_pairs = [self.observe_fn((frag1, frag2)) for frag1, frag2 in fragment_pairs]
-        print("Limits eval")
-        print(limits)
-        print("Length of limits list: ", len(limits))
-        print("Length of fragment_pairs list: ", len(fragment_pairs))
         # TODO - This is a hack to get around the fact that the limits are not being passed in correctly
         pairs = [(frag1, frag2) for frag1, frag2 in fragment_pairs]
-        print(len(pairs))
-        noisy_fragment_pairs = [self.observe_fn(pair, l) for pair, l in zip(pairs, limits)]
+        if limits is not None:
+            noisy_fragment_pairs = [self.observe_fn(pair, l) for pair, l in zip(pairs, limits)]
+        else:
+            noisy_fragment_pairs = [self.observe_fn(pair) for pair in pairs]
 
         return self.wrapped_gatherer(noisy_fragment_pairs)
 

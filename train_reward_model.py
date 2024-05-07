@@ -50,7 +50,7 @@ TESTING = False
 config = {
     "environment": {
         "name": "StealingGridworld",
-        "grid_size": 3,
+        "grid_size": 5,
         "horizon": 30,
         "reward_for_depositing": 100,
         "reward_for_picking_up": 1,
@@ -74,13 +74,13 @@ config = {
         "epsilon": 0.1,
     },
     "visibility": {
-        "visibility": "full",
+        "visibility": "partial",
         # Available visibility mask keys:
         # "full": All of the grid is visible. Not actually used, but should be set for easier comparison.
         # "(n-1)x(n-1)": All but the outermost ring of the grid is visible.
         #"visibility_mask_key": "(n-1)x(n-1)",
-        #"visibility_mask_key": "camera",
-        "visibility_mask_key": "full",
+        "visibility_mask_key": "camera",
+        #"visibility_mask_key": "full",
     },
     "reward_trainer": {
         "num_epochs": 5,
@@ -120,12 +120,13 @@ if config["fragment_length"] == None:
 wandb.login()
 run = wandb.init(
     project="assisting-bounded-humans",
-    notes="Full observability - 3x3 grid",
-    name="FO_3x3",
+    notes="Partial Observability - 5x5 grid",
+    name="PO_5x5_camera",
     tags=[
         "Train Run",
-        "Full Observability"
-        f"{config['environment']['grid_size']}x{config['environment']['grid_size']}"
+        "Partial Observability",
+        "Mask : Camera",
+        f"{config['environment']['grid_size']}x{config['environment']['grid_size']}",
         f"{config['environment']['horizon']} horizon",
         f"Epochs: {config['reward_trainer']['num_epochs']}",
         f"Fragment length: {config['fragment_length']}",
@@ -146,6 +147,7 @@ env = StealingGridworld(
     reward_for_depositing=wandb.config["environment"]["reward_for_depositing"],
     reward_for_picking_up=wandb.config["environment"]["reward_for_picking_up"],
     reward_for_stealing=wandb.config["environment"]["reward_for_stealing"],
+    seed=wandb.config["seed"],
 )
 
 
