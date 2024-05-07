@@ -136,7 +136,7 @@ class DeterministicMDP(abc.ABC):
                     state=state_inputs,
                     action=action_inputs,
                     next_state=state_inputs,
-                    done=np.zeros_like(state_inputs, dtype=np.bool),
+                    done=np.zeros_like(state_inputs, dtype=bool),
                 )
             else:
                 # Use the reward_function.RewardFn protocol
