@@ -63,10 +63,10 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
         self.epsilon = epsilon
 
         if max_vi_steps is None:
-            if hasattr(self.env, "max_steps"):
-                max_vi_steps = self.env.max_steps
+            if hasattr(self.env, "horizon"):
+                max_vi_steps = self.env.horizon
             else:
-                raise ValueError("max_vi_steps must be specified if env does not have a max_steps attribute")
+                raise ValueError("max_vi_steps must be specified if env does not have a horizon attribute")
         self.max_vi_steps = max_vi_steps
 
         # TODO: Can I just pass `rng` to np.random.seed like this?
@@ -325,7 +325,7 @@ class SyntheticScalarFeedbackGatherer(ScalarFeedbackGatherer):
 
     # TODO: This is a placeholder for a more sophisticated synthetic feedback gatherer.
 
-    def __call__(self, fragments):
+    def __call__(self, fragments, limits=None):
         return [np.sum(fragment.rews) for fragment in fragments]
 
 
@@ -362,17 +362,17 @@ class PreferenceComparisonNoisyObservationGathererWrapper(preference_comparisons
             trajectory representing a noisy observation of the original.
     """
 
-    def __init__(self, gatherer, observe_fn):
+    def __init__(self, gatherer, observe_fn, limits=None):
         self.wrapped_gatherer = gatherer
         self.observe_fn = observe_fn
 
-    def __getattr__(self, name):
+    def __getattr__(self, name, limits=None):
         """
         Delegate attribute access to the wrapped gatherer, unless the attribute is overridden in this wrapper.
         """
         return getattr(self.wrapped_gatherer, name)
 
-    def __call__(self, fragment_pairs):
+    def __call__(self, fragment_pairs, limits=None):
         """
         Apply the observation function to each fragment in the pairs, then pass the noisy pairs to the wrapped gatherer.
 
@@ -382,10 +382,16 @@ class PreferenceComparisonNoisyObservationGathererWrapper(preference_comparisons
         Returns:
             np.ndarray: The preference comparisons results (e.g., probabilities or binary decisions) for the noisy pairs.
         """
-        print('observe_fn', self.observe_fn)
-        print(self.observe_fn.feedback)
-        print('fragment type', type(fragment_pairs))
-        noisy_fragment_pairs = [self.observe_fn((frag1, frag2)) for frag1, frag2 in fragment_pairs]
+        #noisy_fragment_pairs = [self.observe_fn((frag1, frag2)) for frag1, frag2 in fragment_pairs]
+        print("Limits eval")
+        print(limits)
+        print("Length of limits list: ", len(limits))
+        print("Length of fragment_pairs list: ", len(fragment_pairs))
+        # TODO - This is a hack to get around the fact that the limits are not being passed in correctly
+        pairs = [(frag1, frag2) for frag1, frag2 in fragment_pairs]
+        print(len(pairs))
+        noisy_fragment_pairs = [self.observe_fn(pair, l) for pair, l in zip(pairs, limits)]
+
         return self.wrapped_gatherer(noisy_fragment_pairs)
 
 class ObservationFunction(abc.ABC):
@@ -712,6 +718,7 @@ class RandomFragmenter(Fragmenter):
         rng: np.random.Generator,
         warning_threshold: int = 10,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+        get_limits: bool = False,
     ) -> None:
         """Initialize the fragmenter.
 
@@ -721,10 +728,13 @@ class RandomFragmenter(Fragmenter):
                 transitions is less than this many times the number of
                 required samples. Set to 0 to disable this warning.
             custom_logger: Where to log to; if None (default), creates a new logger.
+            get_limits: if True, the fragmenter will return the start and end indices
+                of the fragments in the original trajectories.
         """
         super().__init__(custom_logger)
         self.rng = rng
         self.warning_threshold = warning_threshold
+        self.get_limits = get_limits
 
     def __call__(
         self,
@@ -733,6 +743,7 @@ class RandomFragmenter(Fragmenter):
         num_pairs: int,
     ) -> Sequence[TrajectoryWithRewPair]:
         fragments: List[TrajectoryWithRew] = []
+        limits: List[Tuple[Tuple[int, int], Tuple[int, int]]] = []
 
         prev_num_trajectories = len(trajectories)
         # filter out all trajectories that are too short
@@ -792,11 +803,23 @@ class RandomFragmenter(Fragmenter):
                 terminal=terminal,
             )
             fragments.append(fragment)
+            limits.append((start, end))
+            # Here start and end are indices into the original trajectory.
+            # TODO (joan): they can be useful in the camera observation case
+            # to know where the fragment was taken from + the camera position.
+            # fragments.append((fragment, start, end)) 
+
         # fragments is currently a list of single fragments. We want to pair up
         # fragments to get a list of (fragment1, fragment2) tuples. To do so,
         # we create a single iterator of the list and zip it with itself:
         iterator = iter(fragments)
-        return list(zip(iterator, iterator))       
+        limit_pairs = list(zip(limits[0::2], limits[1::2]))  # Pairing start/end indices
+
+        if self.get_limits:
+            return list(zip(iterator, iterator)), limit_pairs       
+        
+        return list(zip(iterator, iterator))
+
     
 class SyntheticGatherer(PreferenceGatherer):
     """Computes synthetic preferences using ground-truth environment rewards."""
@@ -809,6 +832,7 @@ class SyntheticGatherer(PreferenceGatherer):
         rng: Optional[np.random.Generator] = None,
         threshold: float = 50,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+        get_limits: bool = False,
     ) -> None:
         """Initialize the synthetic preference gatherer.
 
@@ -1692,6 +1716,8 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             num_steps = math.ceil(
                 self.transition_oversampling * 2 * num_pairs * self.fragment_length,
             )
+            print(f"Number of steps: {num_steps}")
+            
             self.logger.log(
                 f"Collecting {2 * num_pairs} fragments ({num_steps} transitions)",
             )
@@ -1699,19 +1725,29 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             # This assumes there are no fragments missing initial timesteps
             # (but allows for fragments missing terminal timesteps).
             horizons = (len(traj) for traj in trajectories if traj.terminal)
+            # TODO (joan): if we want to allow for easy camera model observability,
+            # We should create the visibility_mask here and pass it to the fragmenter and gatherer.
             self._check_fixed_horizon(horizons)
             self.logger.log("Creating fragment pairs")
-            fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
+            if self.fragmenter.get_limits:
+                fragments, limits = self.fragmenter(trajectories, self.fragment_length, num_pairs)
+                #print(f"Fragment limits: {limits}")
+            else:
+                fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
+            # Limits are the indices of the last transition in each fragment.
+            # We can use them to place the camera correctly.
+
             with self.logger.accumulate_means("preferences"):
                 self.logger.log("Gathering preferences")
-                preferences = self.preference_gatherer(fragments)
+                self.logger.log(f"Gatherer type: {self.preference_gatherer.__class__.__name__}")
 
-                # def log_detailed_info(fragment_pairs, preferences):
-                #     print("Newly compared fragments and their derived preferences:")
-                #     for (frag1, frag2), pref in zip(fragment_pairs, preferences):
-                #         print(f"Fragment 1: {frag1}, Fragment 2: {frag2} --> Preference: {pref}")
+                # TODO (joan): if we want to allow for easy camera model observability,
+                # a more elegant solution can be probably thought of.
 
-                # log_detailed_info(fragments, preferences)
+                if self.fragmenter.get_limits:
+                    preferences = self.preference_gatherer(fragments, limits)
+                else:
+                    preferences = self.preference_gatherer(fragments)
 
             self.dataset.push(fragments, preferences)
             self.logger.log(f"Dataset now contains {len(self.dataset)} comparisons")

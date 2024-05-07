@@ -7,7 +7,7 @@ import torch as th
 from imitation.util import logger as imit_logger
 
 import wandb
-from evaluate_reward_model import full_visibility_evaluator_factory, partial_visibility_evaluator_factory
+from evaluate_reward_model import full_visibility_evaluator_factory, partial_visibility_evaluator_factory, camera_visibility_evaluator_factory
 from imitation_modules import (
     BasicScalarFeedbackRewardTrainer,
     DeterministicMDPTrajGenerator,
@@ -29,7 +29,7 @@ from imitation_modules import (
     PreferenceComparisonNoisyObservationGathererWrapper,
 )
 
-from stealing_gridworld import PartialGridVisibility, StealingGridworld
+from stealing_gridworld import PartialGridVisibility, DynamicGridVisibility, StealingGridworld
 
 #######################################################################################################################
 ##################################################### Run params ######################################################
@@ -37,8 +37,9 @@ from stealing_gridworld import PartialGridVisibility, StealingGridworld
 
 
 GPU_NUMBER = 0
-N_ITER = 10
-N_COMPARISONS = 30_000
+N_ITER = 40
+N_COMPARISONS = 10_000
+TESTING = False
 
 
 #######################################################################################################################
@@ -61,7 +62,7 @@ config = {
         "kernel_size": 3,
     },
     "seed": 0,
-    "dataset_max_size": 30_000,
+    "dataset_max_size": 10_000,
     # If fragment_length is None, then the whole trajectory is used as a single fragment.
     "fragment_length": 10,
     "transition_oversampling": 10,
@@ -73,11 +74,13 @@ config = {
         "epsilon": 0.1,
     },
     "visibility": {
-        "visibility": "partial",
+        "visibility": "full",
         # Available visibility mask keys:
         # "full": All of the grid is visible. Not actually used, but should be set for easier comparison.
         # "(n-1)x(n-1)": All but the outermost ring of the grid is visible.
-        "visibility_mask_key": "(n-1)x(n-1)",
+        #"visibility_mask_key": "(n-1)x(n-1)",
+        #"visibility_mask_key": "camera",
+        "visibility_mask_key": "full",
     },
     "reward_trainer": {
         "num_epochs": 5,
@@ -92,21 +95,21 @@ if config["feedback"]["type"] not in ("scalar", "preference"):
 if config["visibility"]["visibility"] == "full" and config["visibility"]["visibility_mask_key"] != "full":
     raise ValueError(
         f'If visibility is "full", then visibility mask key must be "full".'
-        f'Instead, it is {wandb.config["visibility"]["visibility_mask_key"]}.'
+        f'Instead, it is {config["visibility"]["visibility_mask_key"]}.'
     )
 
 if config["visibility"]["visibility"] not in ["full", "partial"]:
     raise ValueError(
-        f'Unknown visibility {wandb.config["visibility"]["visibility"]}.' f'Visibility must be "full" or "partial".'
+        f'Unknown visibility {config["visibility"]["visibility"]}.' f'Visibility must be "full" or "partial".'
     )
 
 if config["reward_model"]["type"] != "NonImageCnnRewardNet":
-    raise ValueError(f'Unknown reward model type {wandb.config["reward_model"]["type"]}.')
+    raise ValueError(f'Unknown reward model type {config["reward_model"]["type"]}.')
 
-available_visibility_mask_keys = ["full", "(n-1)x(n-1)"]
+available_visibility_mask_keys = ["full", "(n-1)x(n-1)", "camera"]
 if config["visibility"]["visibility_mask_key"] not in available_visibility_mask_keys:
     raise ValueError(
-        f'Unknown visibility mask key {wandb.config["visibility"]["visibility_mask_key"]}.'
+        f'Unknown visibility mask key {config["visibility"]["visibility_mask_key"]}.'
         f"Available visibility mask keys are {available_visibility_mask_keys}."
     )
 
@@ -117,32 +120,20 @@ if config["fragment_length"] == None:
 wandb.login()
 run = wandb.init(
     project="assisting-bounded-humans",
-    notes="Testing the preference comparisons model",
-    name="PO_preference_comp_3",
+    notes="Full observability - 3x3 grid",
+    name="FO_3x3",
     tags=[
-        "test",
-        "Partial Observability"
+        "Train Run",
+        "Full Observability"
+        f"{config['environment']['grid_size']}x{config['environment']['grid_size']}"
+        f"{config['environment']['horizon']} horizon",
+        f"Epochs: {config['reward_trainer']['num_epochs']}",
+        f"Fragment length: {config['fragment_length']}",
+        f"Max dataset size: {config['dataset_max_size']}",
     ],
     config=config,
+    mode="disabled" if TESTING else "online",
 )
-
-
-def construct_visibility_mask(grid_size, visibility_mask_key, *args, **kwargs):
-    # Any other visibility mask keys should be added here.
-    if visibility_mask_key == "(n-1)x(n-1)":
-        visibility_mask = np.zeros((grid_size, grid_size), dtype=np.bool_)
-        visibility_mask[1:-1, 1:-1] = True
-        return visibility_mask
-    elif visibility_mask_key == "camera":
-        mask = np.zeros((grid_size, grid_size), dtype=np.bool_)
-        start_row = max(0, args.center[0] - 1)
-        start_col = max(0, args.center[1] - 1)
-        end_row = min(grid_size, args.center[0] + 2)
-        end_col = min(grid_size, args.center[1] + 2)
-        mask[start_row:end_row, start_col:end_col] = True
-    else:
-        raise ValueError(f"Unknown visibility mask key {visibility_mask_key}.")
-    
 
 #######################################################################################################################
 ################################################## Create everything ##################################################
@@ -151,7 +142,7 @@ def construct_visibility_mask(grid_size, visibility_mask_key, *args, **kwargs):
 
 env = StealingGridworld(
     grid_size=wandb.config["environment"]["grid_size"],
-    max_steps=wandb.config["environment"]["horizon"],
+    horizon=wandb.config["environment"]["horizon"],
     reward_for_depositing=wandb.config["environment"]["reward_for_depositing"],
     reward_for_picking_up=wandb.config["environment"]["reward_for_picking_up"],
     reward_for_stealing=wandb.config["environment"]["reward_for_stealing"],
@@ -180,18 +171,27 @@ else:
     gatherer = SyntheticGatherer(rng=rng)
 
 if wandb.config["visibility"]["visibility"] == "partial":
-    visibility_mask = construct_visibility_mask(
-        wandb.config["environment"]["grid_size"],
-        wandb.config["visibility"]["visibility_mask_key"],
-    )
-    observation_function = PartialGridVisibility(env, visibility_mask=visibility_mask, feedback=config["feedback"]["type"])
+    # visibility_mask = construct_visibility_mask(
+    #     wandb.config["environment"]["grid_size"],
+    #     wandb.config["visibility"]["visibility_mask_key"],
+    # )
+    if wandb.config["visibility"]["visibility_mask_key"] == "(n-1)x(n-1)":
+        observation_function = PartialGridVisibility(env, mask_key = wandb.config["visibility"]["visibility_mask_key"], feedback=config["feedback"]["type"])
+        print("Debug new observation function: ", observation_function)
+        policy_evaluator = partial_visibility_evaluator_factory(observation_function.visibility_mask)
+    elif wandb.config["visibility"]["visibility_mask_key"] == "camera":
+        fragmenter = RandomFragmenter(rng=rng, get_limits=True)
+        observation_function = DynamicGridVisibility(env, feedback=config["feedback"]["type"])
+        print("Debug new observation function: ", observation_function)
+        policy_evaluator = camera_visibility_evaluator_factory(observation_function)
 
     if wandb.config["feedback"]["type"] == 'scalar':
         gatherer = NoisyObservationGathererWrapper(gatherer, observation_function)
     elif wandb.config["feedback"]["type"] == 'preference':
         gatherer = PreferenceComparisonNoisyObservationGathererWrapper(gatherer, observation_function)
 
-    policy_evaluator = partial_visibility_evaluator_factory(visibility_mask)
+    #policy_evaluator = partial_visibility_evaluator_factory(observation_function.visibility_mask)
+
 elif wandb.config["visibility"]["visibility"] == "full":
     policy_evaluator = full_visibility_evaluator_factory()
 
@@ -254,7 +254,6 @@ if config["feedback"]["type"] == 'scalar':
         initial_epoch_multiplier=wandb.config["initial_epoch_multiplier"],
         policy_evaluator=policy_evaluator,
         custom_logger=logger,
-        callback=save_model_params_and_dataset_callback,
     )
 
 else:
@@ -270,7 +269,7 @@ else:
         transition_oversampling=wandb.config["transition_oversampling"],
         initial_epoch_multiplier=wandb.config["initial_epoch_multiplier"],
         initial_comparison_frac=0.1,
-        #query_schedule="hyperbolic",
+        query_schedule="hyperbolic",
         policy_evaluator=policy_evaluator,
         custom_logger=logger,
     )
@@ -284,6 +283,7 @@ if config["feedback"]["type"] == 'scalar':
         # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
         total_timesteps=10 * N_ITER * wandb.config["environment"]["horizon"],
         total_queries=N_COMPARISONS,
+        callback=save_model_params_and_dataset_callback,
     )
 
 else:
