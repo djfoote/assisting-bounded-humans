@@ -38,7 +38,7 @@ from stealing_gridworld import PartialGridVisibility, DynamicGridVisibility, Ste
 
 GPU_NUMBER = 0
 N_ITER = 40
-N_COMPARISONS = 10_000
+N_COMPARISONS = 10000
 TESTING = False
 
 
@@ -62,7 +62,7 @@ config = {
         "kernel_size": 3,
     },
     "seed": 0,
-    "dataset_max_size": 10_000,
+    "dataset_max_size": 10000,
     # If fragment_length is None, then the whole trajectory is used as a single fragment.
     "fragment_length": 10,
     "transition_oversampling": 10,
@@ -78,8 +78,8 @@ config = {
         # Available visibility mask keys:
         # "full": All of the grid is visible. Not actually used, but should be set for easier comparison.
         # "(n-1)x(n-1)": All but the outermost ring of the grid is visible.
-        #"visibility_mask_key": "(n-1)x(n-1)",
-        "visibility_mask_key": "camera",
+        "visibility_mask_key": "(n-1)x(n-1)",
+        #"visibility_mask_key": "camera",
         #"visibility_mask_key": "full",
     },
     "reward_trainer": {
