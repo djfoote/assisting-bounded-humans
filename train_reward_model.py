@@ -29,7 +29,7 @@ from imitation_modules import (
     PreferenceComparisonNoisyObservationGathererWrapper,
 )
 
-from stealing_gridworld import PartialGridVisibility, DynamicGridVisibility, StealingGridworld
+from stealing_gridworld import PartialGridVisibility, DynamicGridVisibility, StealingGridworld, PartialGridVisibility_HF
 
 #######################################################################################################################
 ##################################################### Run params ######################################################
@@ -69,6 +69,9 @@ config = {
     "initial_epoch_multiplier": 1.0,
     "feedback": {
         "type": "preference",
+        "belief_direction": "neutral",
+        "belief_strength": 1.0,
+        "belief_early": 0.0,
     },
     "trajectory_generator": {
         "epsilon": 0.1,
@@ -91,6 +94,18 @@ config = {
 
 if config["feedback"]["type"] not in ("scalar", "preference"):
     raise NotImplementedError("Only scalar and preference feedback are supported at the moment.")
+
+if config["feedback"]["belief_strength"] < 0 or config["feedback"]["belief_strength"] > 1:
+    raise ValueError(f'Belief strength must be between 0 and 1. Instead, it is {config["feedback"]["belief_strength"]}.')
+
+if config["feedback"]["belief_direction"] not in ["optimistic", "pessimistic", "neutral"]:
+    raise ValueError(
+        f'Unknown belief direction {config["feedback"]["belief_direction"]}.'
+        f'Belief direction must be "optimistic", "pessimistic", or "neutral".'
+    )
+if config["feedback"]["belief_early"] < 0 or config["feedback"]["belief_early"] > 1:
+    raise ValueError(f'Belief early must be between 0 and 1. Instead, it is {config["feedback"]["belief_early"]}.')
+
 
 if config["visibility"]["visibility"] == "full" and config["visibility"]["visibility_mask_key"] != "full":
     raise ValueError(
@@ -178,7 +193,8 @@ if wandb.config["visibility"]["visibility"] == "partial":
     #     wandb.config["visibility"]["visibility_mask_key"],
     # )
     if wandb.config["visibility"]["visibility_mask_key"] == "(n-1)x(n-1)":
-        observation_function = PartialGridVisibility(env, mask_key = wandb.config["visibility"]["visibility_mask_key"], feedback=config["feedback"]["type"])
+        observation_function = PartialGridVisibility_HF(env, mask_key = wandb.config["visibility"]["visibility_mask_key"], feedback=config["feedback"]["type"], 
+                                                        belief_direction=config["feedback"]["belief_direction"], belief_strength=config["feedback"]["belief_strength"], belief_early=config["feedback"]["belief_early"])
         print("Debug new observation function: ", observation_function)
         policy_evaluator = partial_visibility_evaluator_factory(observation_function.visibility_mask)
     elif wandb.config["visibility"]["visibility_mask_key"] == "camera":

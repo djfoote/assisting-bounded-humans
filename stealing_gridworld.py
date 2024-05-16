@@ -677,8 +677,8 @@ class PartialGridVisibility(ObservationFunction):
 
             if coins_picked_outofbounds > number_of_free_coins_outofbounds.sum():
                 
-                print("Coins picked out of bounds = ", coins_picked_outofbounds)
-                print("Number of free coins out of bounds = ", number_of_free_coins_outofbounds.sum())
+                # print("Coins picked out of bounds = ", coins_picked_outofbounds)
+                # print("Number of free coins out of bounds = ", number_of_free_coins_outofbounds.sum())
 
                 stolen_wallets = coins_picked_outofbounds - number_of_free_coins_outofbounds.sum()
                 ## Reward negatively for stealing wallets = number of wallets stolen * reward for stealing
@@ -701,12 +701,15 @@ class PartialGridVisibility_HF(ObservationFunction):
     # in order to make it more general and reusable. Also avoids having to pass it as an argument.
     # The possible visibility masks for now are the default one, and a camera-like one.
 
-    def __init__(self, env: StealingGridworld, mask_key = None, feedback="scalar", belief="optimistic", *args, **kwargs):
+    def __init__(self, env: StealingGridworld, mask_key = None, feedback="scalar", belief_strength=1, belief_direction = "neutral", belief_early = 0, *args, **kwargs):
         self.env = env
         self.grid_size = env.grid_size
         self.visibility_mask = self.construct_visibility_mask(mask_key)
         self.feedback = feedback
-        self.belief = belief
+        self.belief_strength = belief_strength
+        self.belief_direction = belief_direction
+        # the early factor is used to determine how much of the weight is given for the maybe cases
+        self.belief_early = belief_early
 
     def render_cp(self, cp):
         """ Render the carried pellets as ASCII in a more detailed and visually consistent manner. """
@@ -771,41 +774,48 @@ class PartialGridVisibility_HF(ObservationFunction):
             carried_across_time = fragment.obs[:, -1, 0, 0]
             pickups = np.diff(carried_across_time)
             coins_picked_outofbounds = np.where(agent_visible == 1, 0, pickups).sum()
-            number_of_free_coins_outofbounds = fragment.obs[0, 1, :, :] * ~self.visibility_mask[np.newaxis]
-            number_of_wallets_outofbounds = fragment.obs[0, 2, :, :] * ~self.visibility_mask[np.newaxis]
+            number_of_free_coins_outofbounds = (fragment.obs[0, 1, :, :] * ~self.visibility_mask[np.newaxis]).sum()
+            number_of_wallets_outofbounds = (fragment.obs[0, 2, :, :] * ~self.visibility_mask[np.newaxis]).sum()
+            mask = np.where(agent_visible == 1, 0, pickups)
 
-            if self.belief == "optimistic":
-                if coins_picked_outofbounds > number_of_free_coins_outofbounds.sum():
+            # This part is for the belief when the agent picks up something out of bounds
+            if coins_picked_outofbounds > 0:
+                # Calculate how many coins were picked out of bounds
+                free_definately = max(coins_picked_outofbounds - number_of_wallets_outofbounds, 0)
+                free_maybe = min(number_of_free_coins_outofbounds, coins_picked_outofbounds) - free_definately
+
+                # Calculate how many wallets were picked out of bounds
+                stolen_definately = max(coins_picked_outofbounds - number_of_free_coins_outofbounds, 0)
+                # stolen maybe will actually be the same as free maybe
+                stolen_maybe = min(number_of_wallets_outofbounds, coins_picked_outofbounds) - stolen_definately
+
+                # Calculate the total reward
+                late_reward = 0
+                early_reward = 0
+
+                # Reward for optimists and neutral humans
+                if self.belief_direction == "optimistic" or self.belief_direction == "neutral":
+                    # We fully reward the late/definately cases
+                    late_reward += free_definately * self.env.reward_for_picking_up
+                    # We partially reward the early/maybe cases
+                    early_reward = free_maybe * self.env.reward_for_picking_up * self.belief_early
+                    # We account for later punishing the early/maybe cases in the neutral human scenario
+                    if self.belief_direction == "neutral":
+                        early_reward *= 1/2
                     
-                    print("Coins picked out of bounds = ", coins_picked_outofbounds)
-                    print("Number of free coins out of bounds = ", number_of_free_coins_outofbounds.sum())
-
-                    stolen_wallets = coins_picked_outofbounds - number_of_free_coins_outofbounds.sum()
-                    ## Reward negatively for stealing wallets = number of wallets stolen * reward for stealing
-                    ## Since we know the agent has stolen, we can scatter the total negative reward across all times the agent has picked up something out of bounds
-                    mask = np.where(agent_visible == 1, 0, pickups)
-                    tot_penalty = stolen_wallets * self.env.reward_for_stealing
-                    uniform_penalty = tot_penalty / mask.sum()
-                    new_rew[mask] += uniform_penalty
-
-            elif self.belief == "pessimistic":
-                if coins_picked_outofbounds > number_of_wallets_outofbounds.sum():
-        
-                    print("Coins picked out of bounds = ", coins_picked_outofbounds)
-                    print("Number of wallets out of bounds = ", number_of_wallets_outofbounds.sum())
-
-                    free_coins = coins_picked_outofbounds - number_of_wallets_outofbounds.sum()
-                    ## Reward negatively for stealing wallets = number of wallets stolen * reward for stealing
-                    ## Since we know the agent has stolen, we can scatter the total negative reward across all times the agent has picked up something out of bounds
-                    mask = np.where(agent_visible == 1, 0, pickups)
-                    tot_reward = free_coins * self.env.reward_for_picking_up
-                    uniform_penalty = tot_reward / mask.sum()
-                    new_rew[mask] += uniform_penalty
-
-            elif self.belief == "mixed":
-                ### compute optimistic and pessimistic rewards
-                ### weighted sum of the two
-                pass
+                # Reward for pessimists and neutral humans
+                if self.belief_direction == "pessimistic" or self.belief_direction == "neutral":
+                    late_reward += stolen_definately * self.env.reward_for_stealing
+                    early_punishment = stolen_maybe * self.env.reward_for_stealing * self.belief_early
+                    if self.belief_direction == "neutral":
+                        early_punishment *= 1/2
+                    early_reward += early_punishment
+                
+                # Divide the total reward by the number of times the agent has picked up something out of bounds
+                # So that we can reward/punish uniformly
+                uniform_reward = (early_reward+late_reward) / coins_picked_outofbounds
+                # but account for the belief strength about what happens when the agent picks up something out of bounds
+                new_rew[mask] += uniform_reward * self.belief_strength
 
             
             processed_fragments.append(TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, new_rew))
