@@ -247,14 +247,13 @@ class DeterministicMDP(abc.ABC):
 
         if render:
             self.render()
-
         while not done or (fixed_horizon is not None and len(actions) < fixed_horizon):
             if epsilon is not None and np.random.random() < epsilon:
                 action = np.random.choice(self.actions)
             else:
-                action = policy.predict(state)
+                action = policy.predict(state, deterministic=True)
                 action = action[0] if isinstance(action, tuple) else action
-            next_state, reward, _, done, _ = self.step(self.get_action_index(action))
+            next_state, reward, _, done, _ = self.step(self.get_action_index(action), sample=True)
             if logging_callback is not None:
                 logging_callback(state, action, reward)
             states.append(next_state)

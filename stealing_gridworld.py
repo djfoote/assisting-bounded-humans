@@ -6,6 +6,7 @@ import gymnasium as gym
 import numpy as np
 import tqdm
 from gymnasium import spaces
+
 from imitation.data.types import TrajectoryWithRew
 
 from deterministic_mdp import DeterministicMDP
@@ -39,15 +40,33 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         reward_for_depositing=1,
         reward_for_picking_up=0,
         reward_for_stealing=-2,
+        randomize=False,
         max_steps=100,
+        reward_fn=None
     ):
-        self.grid_size = grid_size
-        self.num_free_pellets = num_free_pellets
-        self.num_owned_pellets = num_owned_pellets
-        self.num_pellets = num_free_pellets + num_owned_pellets
         self.reward_for_depositing = reward_for_depositing
         self.reward_for_picking_up = reward_for_picking_up
         self.reward_for_stealing = reward_for_stealing
+        self.alt_reward_fn = reward_fn
+        self.randomize = randomize
+        if self.randomize:
+            print('Using randomized environment')
+            # set random grid (uneven valued) grid size, pellet count, and reward values
+            self.grid_size = np.random.choice(range(3, 10, 2))
+            grid_size = self.grid_size
+            self.num_free_pellets = np.random.choice(range(1, 5))
+            self.num_owned_pellets = np.random.choice(range(1, 5))
+        else:
+            self.grid_size = grid_size
+            self.num_free_pellets = num_free_pellets
+            self.num_owned_pellets = num_owned_pellets
+        self.num_pellets = num_free_pellets + num_owned_pellets
+        
+        print('Using the following environment parameters:')
+        print(f'Grid size: {self.grid_size}')
+        print(f'Number of free pellets: {self.num_free_pellets}')
+        print(f'Number of owned pellets: {self.num_owned_pellets}')
+            
 
         self.params_string = (
             f"gs{grid_size}_nfp{num_free_pellets}_nop{num_owned_pellets}_rfd{reward_for_depositing}"
@@ -80,7 +99,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         self.reset()
 
-    def reset(self, seed=None):
+    def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
         # Agent starts at home.
@@ -99,7 +118,19 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         return self._get_observation(), {}
 
-    def step(self, action):
+    def alt_reward(self, state, action):
+        # state = state.reshape((5, self.grid_size, self.grid_size))
+        state_inputs = np.repeat(state, len(np.array([action])), axis=0)
+        state_inputs = state_inputs[np.newaxis, :]
+        reward = self.alt_reward_fn.predict(
+                state=state_inputs,
+                action=action,
+                next_state=state_inputs,
+                done=np.zeros_like(state, dtype=bool),
+            )
+        return reward[0]
+
+    def step(self, action, sample=False):
         self.steps += 1
 
         # Default reward
@@ -111,18 +142,16 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             new_position = self.agent_position + direction
             if np.all(new_position >= 0) and np.all(new_position < self.grid_size):
                 self.agent_position = new_position
-
         # Interact with environment
         elif np.any(np.all(self.pellet_locations["free"] == self.agent_position, axis=1)):
-            reward = self.reward_for_picking_up
+            reward = self.reward_for_picking_up if sample else self.alt_reward(self._get_observation(), action)
             self._pick_up_pellet(pellet_type="free")
         elif np.any(np.all(self.pellet_locations["owned"] == self.agent_position, axis=1)):
-            reward = self.reward_for_stealing
+            reward = self.reward_for_stealing if sample else self.alt_reward(self._get_observation(), action)
             self._pick_up_pellet(pellet_type="owned")
         elif np.all(self.agent_position == self.home_location) and self.num_carried_pellets > 0:
-            reward = self.num_carried_pellets * self.reward_for_depositing
+            reward = (self.num_carried_pellets * self.reward_for_depositing) if sample else self.alt_reward(self._get_observation(), action)
             self.num_carried_pellets = 0
-
         # Compute done
         done = self.steps >= self.max_steps
         # sb3 requires both truncated and done
@@ -138,7 +167,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         """
         prev_state = self._get_observation()
         self._register_state(state)
-        successor_state, reward, _, _, _ = self.step(action)
+        successor_state, reward, _, _, _ = self.step(action, sample=True)
         self._register_state(prev_state)
         return successor_state, reward
 
@@ -147,7 +176,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         Returns the reward for a given state and action.
         """
         self._register_state(state)
-        _, reward, _, _, _ = self.step(action)
+        _, reward, _, _, _ = self.step(action, sample=True)
 
         return reward
 
@@ -257,14 +286,14 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         num_carried_pellets,
     ):
         image = np.zeros((4, self.grid_size, self.grid_size), dtype=np.int16)
-        image[0, agent_position[0], agent_position[1]] = 1
+        image[0, agent_position[0], agent_position[1]] = np.array([1], dtype=np.int16)
         for pellet_location in free_pellet_locations:
-            image[1, pellet_location[0], pellet_location[1]] = 1
+            image[1, pellet_location[0], pellet_location[1]] = np.array([1], dtype=np.int16)
         for pellet_location in owned_pellet_locations:
-            image[2, pellet_location[0], pellet_location[1]] = 1
-        image[3, self.home_location[0], self.home_location[1]] = 1
+            image[2, pellet_location[0], pellet_location[1]] = np.array([1], dtype=np.int16)
+        image[3, self.home_location[0], self.home_location[1]] = np.array([1], dtype=np.int16)
         categorical = np.full((1, self.grid_size, self.grid_size), num_carried_pellets, dtype=np.int16)
-        return np.concatenate([image, categorical], axis=0)
+        return np.concatenate([image, categorical], axis=0).flatten()
 
     def _get_random_locations(self, n=1, excluding=None):
         """
@@ -403,7 +432,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                     else:
                         action = policy.predict(self._get_observation())
 
-            obs, reward, done, _, _ = self.step(action)
+            obs, reward, done, _, _ = self.step(action, sample=True)
             total_reward += reward
             print("Reward: {}".format(reward))
             print()

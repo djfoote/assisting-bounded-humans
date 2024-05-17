@@ -10,7 +10,10 @@ from imitation.algorithms import preference_comparisons
 from imitation.util import logger as imit_logger
 
 import wandb
-from evaluate_reward_model import full_visibility_evaluator_factory, partial_visibility_evaluator_factory
+from evaluate_reward_model import (
+    full_visibility_evaluator_factory,
+    partial_visibility_evaluator_factory,
+)
 from imitation_modules import (
     BasicScalarFeedbackRewardTrainer,
     DeterministicMDPTrajGenerator,
@@ -23,6 +26,7 @@ from imitation_modules import (
     SyntheticScalarFeedbackGatherer,
 )
 from stealing_gridworld import PartialGridVisibility, StealingGridworld
+import datetime
 
 #######################################################################################################################
 ##################################################### Run params ######################################################
@@ -38,7 +42,6 @@ N_COMPARISONS = 10_000
 ##################################################### Expt params #####################################################
 #######################################################################################################################
 
-
 config = {
     "environment": {
         "name": "StealingGridworld",
@@ -47,6 +50,7 @@ config = {
         "reward_for_depositing": 100,
         "reward_for_picking_up": 1,
         "reward_for_stealing": -200,
+        "randomize": False,
     },
     "reward_model": {
         "type": "NonImageCnnRewardNet",
@@ -83,7 +87,10 @@ config = {
 if config["feedback"]["type"] != "scalar":
     raise NotImplementedError("Only scalar feedback is supported at the moment.")
 
-if config["visibility"]["visibility"] == "full" and config["visibility"]["visibility_mask_key"] != "full":
+if (
+    config["visibility"]["visibility"] == "full"
+    and config["visibility"]["visibility_mask_key"] != "full"
+):
     raise ValueError(
         f'If visibility is "full", then visibility mask key must be "full".'
         f'Instead, it is {wandb.config["visibility"]["visibility_mask_key"]}.'
@@ -91,11 +98,14 @@ if config["visibility"]["visibility"] == "full" and config["visibility"]["visibi
 
 if config["visibility"]["visibility"] not in ["full", "partial"]:
     raise ValueError(
-        f'Unknown visibility {wandb.config["visibility"]["visibility"]}.' f'Visibility must be "full" or "partial".'
+        f'Unknown visibility {wandb.config["visibility"]["visibility"]}.'
+        f'Visibility must be "full" or "partial".'
     )
 
 if config["reward_model"]["type"] != "NonImageCnnRewardNet":
-    raise ValueError(f'Unknown reward model type {wandb.config["reward_model"]["type"]}.')
+    raise ValueError(
+        f'Unknown reward model type {wandb.config["reward_model"]["type"]}.'
+    )
 
 available_visibility_mask_keys = ["full", "(n-1)x(n-1)"]
 if config["visibility"]["visibility_mask_key"] not in available_visibility_mask_keys:
@@ -108,10 +118,11 @@ if config["fragment_length"] == None:
     config["fragment_length"] = config["environment"]["horizon"]
 
 wandb.login()
+timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 run = wandb.init(
     project="assisting-bounded-humans",
     notes="finalizing logging pipeline for now",
-    name="PPO_FO_run-multiplied_steps",
+    name=f"PPO_FO_run-alt_reward_fn_{timestamp}",
     tags=[
         "debug",
     ],
@@ -140,6 +151,7 @@ env = StealingGridworld(
     reward_for_depositing=wandb.config["environment"]["reward_for_depositing"],
     reward_for_picking_up=wandb.config["environment"]["reward_for_picking_up"],
     reward_for_stealing=wandb.config["environment"]["reward_for_stealing"],
+    randomize=wandb.config["environment"]["randomize"],
 )
 
 
@@ -149,6 +161,8 @@ reward_net = NonImageCnnRewardNet(
     hid_channels=wandb.config["reward_model"]["hid_channels"],
     kernel_size=wandb.config["reward_model"]["kernel_size"],
 )
+
+env.alt_reward_fn = reward_net
 
 rng = np.random.default_rng(wandb.config["seed"])
 
@@ -185,6 +199,7 @@ trajectory_generator = DeterministicMDPTrajGenerator(
     env=env,
     rng=None,  # This doesn't work yet
     epsilon=wandb.config["trajectory_generator"]["epsilon"],
+    wandb_run=run,
 )
 logger = imit_logger.configure(format_strs=["stdout", "wandb"])
 
@@ -194,8 +209,12 @@ def save_model_params_and_dataset_callback(reward_learner):
     latest_checkpoint_path = os.path.join(data_dir, "latest_checkpoint.pt")
     latest_dataset_path = os.path.join(data_dir, "latest_dataset.pkl")
     checkpoints_dir = os.path.join(data_dir, "checkpoints")
-    checkpoint_iter_path = os.path.join(checkpoints_dir, f"model_weights_iter{reward_learner._iteration}.pt")
-    dataset_iter_path = os.path.join(checkpoints_dir, f"dataset_iter{reward_learner._iteration}.pkl")
+    checkpoint_iter_path = os.path.join(
+        checkpoints_dir, f"model_weights_iter{reward_learner._iteration}.pt"
+    )
+    dataset_iter_path = os.path.join(
+        checkpoints_dir, f"dataset_iter{reward_learner._iteration}.pkl"
+    )
 
     os.makedirs(checkpoints_dir, exist_ok=True)
     th.save(reward_learner.model.state_dict(), latest_checkpoint_path)

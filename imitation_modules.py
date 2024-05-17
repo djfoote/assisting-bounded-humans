@@ -19,7 +19,10 @@ from torch.utils import data as data_th
 from tqdm.auto import tqdm
 
 import value_iteration
-from stable_baselines3 import PPO
+from sbx import PPO
+from gymnasium.wrappers import FlattenObservation
+from wandb.integration.sb3 import WandbCallback
+
 
 
 class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
@@ -27,7 +30,7 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
     A trajectory generator for a deterministic MDP that can be solved exactly using value iteration.
     """
 
-    def __init__(self, reward_fn, env, rng, vi_gamma=0.99, max_vi_steps=None, epsilon=None, custom_logger=None):
+    def __init__(self, reward_fn, env, rng, vi_gamma=0.99, max_vi_steps=None, epsilon=None, custom_logger=None, wandb_run=None):
         super().__init__(custom_logger=custom_logger)
 
         self.reward_fn = reward_fn
@@ -35,6 +38,7 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
         self.rng = rng
         self.vi_gamma = vi_gamma
         self.epsilon = epsilon
+        self.run = wandb_run
 
         if max_vi_steps is None:
             if hasattr(self.env, "max_steps"):
@@ -44,7 +48,8 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
         self.max_vi_steps = max_vi_steps
 
         # TODO: Can I just pass `rng` to np.random.seed like this?
-        self.policy = PPO("MlpPolicy", env, verbose=1) #value_iteration.RandomPolicy(self.env, self.rng)
+        env = FlattenObservation(env)
+        self.policy = PPO("MlpPolicy", env, verbose=1)
 
     def sample(self, steps):
         """
@@ -70,13 +75,12 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
         """
         
         # replace value iteration with PPO training
-        self.policy.learn(total_timesteps=steps)
-        self.policy.save("PPOStealingGridWorldPolicy")
-        # vi_steps = min(steps, self.max_vi_steps)
-        # self.policy = value_iteration.get_optimal_policy(
-        #     self.env, gamma=self.vi_gamma, horizon=vi_steps, alt_reward_fn=self.reward_fn
-        # )
 
+        self.policy.learn(total_timesteps=steps, progress_bar=True, callback=WandbCallback(
+        gradient_save_freq=100,
+        model_save_path=f"models/{self.run.id}",
+        verbose=2,
+    ),)
 
 class NonImageCnnRewardNet(RewardNet):
     """
@@ -120,11 +124,14 @@ class NonImageCnnRewardNet(RewardNet):
         """
         Override standard input preprocess to bypass image preprocessing. Only lifts inputs to tensors.
         """
+        # if state input is a flattened array, reshape into an 'image' 
+        batch = state.shape[0]
+        grid_size = np.sqrt(state.shape[1] // 5).astype(int)
+        state = state.reshape(batch, 5, grid_size, grid_size)
         state_th = util.safe_to_tensor(state).to(self.device).float()
         action_th = util.safe_to_tensor(action).to(self.device)
         next_state_th = util.safe_to_tensor(next_state).to(self.device)
         done_th = util.safe_to_tensor(done).to(self.device)
-
         return state_th, action_th, next_state_th, done_th
 
     def forward(
@@ -152,8 +159,8 @@ class NonImageCnnRewardNet(RewardNet):
         if action.ndim == 1:
             rewards = outputs[th.arange(action.shape[0]), action.int()]
         else:
+            action = th.nn.functional.one_hot(action.long(), num_classes=outputs.shape[1])
             rewards = th.sum(outputs * action, dim=1)
-
         return rewards
 
 
@@ -594,7 +601,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
                 num_steps += extra_timesteps
 
             self.logger.log(f"Training agent for {num_steps} timesteps")
-            self.trajectory_generator.train(steps=num_steps*10)
+            self.trajectory_generator.train(steps=num_steps)
 
             ###################
             # Log information #
