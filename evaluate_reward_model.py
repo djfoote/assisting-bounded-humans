@@ -84,10 +84,12 @@ class StoleInvisiblePellet(BadTrajectoryCondition):
     
     def applies(self, trajectory):
         end_owned = trajectory.obs[-1][2]
+        start_owned = trajectory.obs[0][2]
         # Calculating off-screen owned pellets
         end_owned_off_screen = end_owned * (1 - self.visibility_mask)
+        start_owned_off_screen = start_owned * (1 - self.visibility_mask)
         # Checking if there is no owned pellet off-screen
-        return not end_owned_off_screen.any()
+        return not end_owned_off_screen.any() if start_owned_off_screen.any() else False
 
 
 class FailedToPickUpFreePellet(BadTrajectoryCondition):

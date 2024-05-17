@@ -78,8 +78,8 @@ config = {
         # Available visibility mask keys:
         # "full": All of the grid is visible. Not actually used, but should be set for easier comparison.
         # "(n-1)x(n-1)": All but the outermost ring of the grid is visible.
-        #"visibility_mask_key": "(n-1)x(n-1)",
-        "visibility_mask_key": "camera",
+        "visibility_mask_key": "(n-1)x(n-1)",
+        #"visibility_mask_key": "camera",
         #"visibility_mask_key": "full",
     },
     "reward_trainer": {
@@ -121,11 +121,11 @@ wandb.login()
 run = wandb.init(
     project="assisting-bounded-humans",
     notes="Partial Observability - 5x5 grid",
-    name="PO_5x5_camera",
+    name="PO_5x5_frame",
     tags=[
         "Train Run",
         "Partial Observability",
-        "Mask : Camera",
+        "Mask : Frame",
         f"{config['environment']['grid_size']}x{config['environment']['grid_size']}",
         f"{config['environment']['horizon']} horizon",
         f"Epochs: {config['reward_trainer']['num_epochs']}",

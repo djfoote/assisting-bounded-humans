@@ -192,6 +192,52 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         return states
 
+    # def enumerate_states(self):
+    #     """
+    #     Returns a list of all possible states in the environment.
+    #     """
+    #     states = []
+    #     grid_size_squared = self.grid_size ** 2
+    #     home_location_raveled = np.ravel_multi_index(self.home_location, (self.grid_size, self.grid_size))
+
+    #     agent_positions = np.array(list(itertools.product(range(self.grid_size), repeat=2)))
+    #     num_carried_pellets_range = np.arange(self.num_pellets + 1)
+    #     num_loose_pellets_range = np.arange(self.num_pellets + 1)
+
+    #     # Precompute all possible combinations of pellet locations
+    #     all_pellet_combinations = []
+    #     for num_loose_pellets in reversed(num_loose_pellets_range):
+    #         all_pellet_combinations.append(np.array(list(itertools.combinations(range(grid_size_squared - 1), num_loose_pellets)), dtype=np.int32))
+
+    #     for agent_position in tqdm.tqdm(agent_positions, desc="Enumerating states"):
+    #         for num_carried_pellets in num_carried_pellets_range:
+    #             for num_loose_pellets in reversed(range(self.num_pellets - num_carried_pellets + 1)):
+    #                 pellet_combinations = all_pellet_combinations[num_loose_pellets]
+
+    #                 # Exclude home location
+    #                 pellet_combinations[pellet_combinations >= home_location_raveled] += 1
+
+    #                 min_loose_free_pellets = max(0, num_loose_pellets - self.num_owned_pellets)
+    #                 for num_loose_free_pellets in range(min_loose_free_pellets, self.num_free_pellets + 1):
+    #                     indices_combinations = np.array(list(itertools.combinations(range(pellet_combinations.shape[1]), num_loose_free_pellets)))
+
+    #                     for pellet_locations in pellet_combinations:
+    #                         for indices in indices_combinations:
+    #                             free_pellet_locations_raveled = pellet_locations[list(indices)]
+    #                             owned_pellet_locations_raveled = np.delete(pellet_locations, list(indices))
+    #                             free_pellet_locations = np.array(np.unravel_index(free_pellet_locations_raveled, (self.grid_size, self.grid_size))).T
+    #                             owned_pellet_locations = np.array(np.unravel_index(owned_pellet_locations_raveled, (self.grid_size, self.grid_size))).T
+
+    #                             state = self._get_observation_from_state_components(
+    #                                 agent_position=np.array(agent_position),
+    #                                 num_carried_pellets=num_carried_pellets,
+    #                                 free_pellet_locations=free_pellet_locations,
+    #                                 owned_pellet_locations=owned_pellet_locations,
+    #                             )
+    #                             states.append(state)
+
+    #     return states
+
 
     def enumerate_actions(self):
         """
