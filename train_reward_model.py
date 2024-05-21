@@ -67,7 +67,7 @@ config = {
         "kernel_size": 3,
     },
     "seed": 0,
-    "dataset_max_size": 10_000,
+    "dataset_max_size": 100_000,
     # If fragment_length is None, then the whole trajectory is used as a single fragment.
     "fragment_length": 10,
     "transition_oversampling": 10,
@@ -79,13 +79,14 @@ config = {
         "epsilon": 0.1,
     },
     "visibility": {
-        "visibility": "partial",
+        #"visibility": "partial",
+        "visibility": "full",
         # Available visibility mask keys:
         # "full": All of the grid is visible. Not actually used, but should be set for easier comparison.
         # "(n-1)x(n-1)": All but the outermost ring of the grid is visible.
-        "visibility_mask_key": "(n-1)x(n-1)",
+        #"visibility_mask_key": "(n-1)x(n-1)",
         #"visibility_mask_key": "camera",
-        #"visibility_mask_key": "full",
+        "visibility_mask_key": "full",
     },
     "reward_trainer": {
         "num_epochs": 5,
@@ -129,12 +130,12 @@ wandb.login()
 timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 run = wandb.init(
     project="assisting-bounded-humans",
-    notes="Partial Observability - 5x5 grid",
-    name="PO_5x5_frame",
+    notes="Full Observability - PPO - 5x5",
+    name="FO-PPO-5x5",
     tags=[
         "Train Run",
-        "Partial Observability",
-        "Mask : Frame",
+        "Full Observability",
+        "Mask : None",
         f"{config['environment']['grid_size']}x{config['environment']['grid_size']}",
         f"{config['environment']['horizon']} horizon",
         f"Epochs: {config['reward_trainer']['num_epochs']}",

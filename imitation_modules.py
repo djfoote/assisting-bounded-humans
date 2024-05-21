@@ -43,7 +43,7 @@ from stable_baselines3.common import type_aliases
 from tqdm.auto import tqdm
 
 import value_iteration
-from sbx import PPO
+from stable_baselines3 import PPO
 from gymnasium.wrappers import FlattenObservation
 from wandb.integration.sb3 import WandbCallback
 

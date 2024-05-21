@@ -39,17 +39,21 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         reward_for_depositing=1,
         reward_for_picking_up=0,
         reward_for_stealing=-2,
+        home_location=None,
         randomize=False,
-        max_steps=100,
-        reward_fn=None
+        horizon=100,
+        reward_fn=None,
+        seed=None,
     ):
         self.reward_for_depositing = reward_for_depositing
         self.reward_for_picking_up = reward_for_picking_up
         self.reward_for_stealing = reward_for_stealing
         self.alt_reward_fn = reward_fn
         self.randomize = randomize
+        self.seed = seed
         if self.randomize:
             print('Using randomized environment')
+            assert self.seed is not None, "Randomized environment requires a seed"
             # set random grid (uneven valued) grid size, pellet count, and reward values
             self.grid_size = np.random.choice(range(3, 10, 2))
             grid_size = self.grid_size
@@ -158,7 +162,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             reward = (self.num_carried_pellets * self.reward_for_depositing) if sample else self.alt_reward(self._get_observation(), action)
             self.num_carried_pellets = 0
         # Compute done
-        done = self.steps >= self.max_steps
+        done = self.steps >= self.horizon
         # sb3 requires both truncated and done
         # truncated is typically for if the goal is reached so...
         # TODO: implement a goal?
