@@ -22,6 +22,7 @@ import value_iteration
 from sbx import PPO
 from gymnasium.wrappers import FlattenObservation
 from wandb.integration.sb3 import WandbCallback
+from stable_baselines3.common.env_checker import check_env
 
 
 
@@ -49,7 +50,9 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
 
         # TODO: Can I just pass `rng` to np.random.seed like this?
         env = FlattenObservation(env)
-        self.policy = PPO("MlpPolicy", env, verbose=1)
+        print('Checking environment...')
+        check_env(env)
+        self.policy = PPO("MlpPolicy", env, policy_kwargs=dict(net_arch=[128, 128, 128]), verbose=2)
 
     def sample(self, steps):
         """
@@ -76,7 +79,7 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
         
         # replace value iteration with PPO training
 
-        self.policy.learn(total_timesteps=steps, progress_bar=True, callback=WandbCallback(
+        self.policy.learn(total_timesteps=steps*100, progress_bar=True, callback=WandbCallback(
         gradient_save_freq=100,
         model_save_path=f"models/{self.run.id}",
         verbose=2,
