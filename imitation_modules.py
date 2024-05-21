@@ -1682,6 +1682,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
         else:
             raise ValueError(f"Unknown query schedule: {query_schedule}")
 
+        # set up the dataset --> Preference dataset instead of scalar dataset!
         self.dataset = PreferenceDataset(max_size=comparison_queue_size)
         self.policy_evaluator = policy_evaluator
 
