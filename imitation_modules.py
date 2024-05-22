@@ -47,8 +47,32 @@ from stable_baselines3 import PPO
 from gymnasium.wrappers import FlattenObservation
 from wandb.integration.sb3 import WandbCallback
 
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from stable_baselines3 import PPO
+from stable_baselines3.common.policies import ActorCriticPolicy
 
+class CustomCNNFeaturesExtractor(BaseFeaturesExtractor):
+    def __init__(self, observation_space, features_dim=256):
+        super(CustomCNNFeaturesExtractor, self).__init__(observation_space, features_dim)
+        # Assuming observation space is channels x width x height
+        n_input_channels = observation_space.shape[0]
+        self.cnn = nn.Sequential(
+            nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(64 * observation_space.shape[1] * observation_space.shape[2], features_dim),
+            nn.ReLU(),
+        )
 
+    def forward(self, observations):
+        return self.cnn(observations)
+
+# Custom Policy that uses the CNN
+class CustomCNNPolicy(ActorCriticPolicy):
+    def __init__(self, observation_space, action_space, lr_schedule, features_extractor_class=CustomCNNFeaturesExtractor, **kwargs):
+        super(CustomCNNPolicy, self).__init__(observation_space, action_space, lr_schedule, features_extractor_class=features_extractor_class, **kwargs)
 
 
 
@@ -75,8 +99,9 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
         self.max_vi_steps = max_vi_steps
 
         # TODO: Can I just pass `rng` to np.random.seed like this?
-        env = FlattenObservation(env)
-        self.policy = PPO("MlpPolicy", env, verbose=1)
+        #env = FlattenObservation(env)
+        #self.policy = PPO(CustomCNNPolicy, env, verbose=2, n_steps=4096, learning_rate=3e-3, device='cpu')
+        self.policy = PPO("MlpPolicy", env, verbose=2, n_steps=4096, learning_rate=3e-2, device='cpu')
 
     def sample(self, steps):
         """
@@ -89,7 +114,7 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
                 self.policy,
                 fixed_horizon=self.max_vi_steps,
                 epsilon=self.epsilon,
-                render=False,
+                render=True,
             )
             trajectories.append(trajectory)
             total_steps += len(trajectory)
@@ -1722,6 +1747,7 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
         reward_accuracy = None
 
         for i, num_pairs in enumerate(schedule):
+            print(f"Iteration {i} of {self.num_iterations}")
             ##########################
             # Gather new preferences #
             ##########################
@@ -1799,18 +1825,18 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             # Log information #
             ###################
 
-            if self.policy_evaluator is not None:
-                with networks.evaluating(self.model):
-                    prop_bad, prop_bad_per_condition = self.policy_evaluator.evaluate(
-                        policy=self.trajectory_generator.policy,
-                        env=self.trajectory_generator.env,
-                        num_trajs=1000,
-                    )
-                    self.logger.record("policy_behavior/prop_bad_rollouts", prop_bad)
-                    for condition, prop in prop_bad_per_condition.items():
-                        self.logger.record(f"policy_behavior/prop_bad_rollouts_{condition}", prop)
+            # if self.policy_evaluator is not None:
+            #     with networks.evaluating(self.model):
+            #         prop_bad, prop_bad_per_condition = self.policy_evaluator.evaluate(
+            #             policy=self.trajectory_generator.algorithm, # was self.trajectory_generator.policy,
+            #             venv=self.trajectory_generator.venv,
+            #             num_trajs=1000,
+            #         )
+            #         self.logger.record("policy_behavior/prop_bad_rollouts", prop_bad)
+            #         for condition, prop in prop_bad_per_condition.items():
+            #             self.logger.record(f"policy_behavior/prop_bad_rollouts_{condition}", prop)
 
-            self.logger.dump(self._iteration)
+            # self.logger.dump(self._iteration)
 
             ########################
             # Additional Callbacks #

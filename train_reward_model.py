@@ -36,15 +36,43 @@ from imitation_modules import (
 from stealing_gridworld import PartialGridVisibility, DynamicGridVisibility, StealingGridworld
 import datetime
 
+import gym
+
+class AsyncEnvWrapper(gym.Wrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        self._actions = None
+        self._obs = None
+        self._rewards = None
+        self._dones = None
+        self._infos = None
+
+    def step_async(self, actions):
+        """Save actions to be executed in step_wait."""
+        self._actions = actions
+
+    def step_wait(self):
+        """Perform the actual step using the saved actions."""
+        if self._actions is None:
+            raise RuntimeError("step_async must be called before step_wait")
+        self._obs, self._rewards, self._dones, self._infos = self.env.step(self._actions)
+        return self._obs, self._rewards, self._dones, self._infos
+
+    def step(self, action):
+        """Override the step to maintain compatibility with non-vectorized steps."""
+        self.step_async(action)
+        return self.step_wait()
+
+
 #######################################################################################################################
 ##################################################### Run params ######################################################
 #######################################################################################################################
 
 
 GPU_NUMBER = 0
-N_ITER = 40
+N_ITER = 60
 N_COMPARISONS = 10_000
-TESTING = False
+TESTING = True
 
 
 #######################################################################################################################
@@ -57,9 +85,11 @@ config = {
         "grid_size": 5,
         "horizon": 30,
         "reward_for_depositing": 100,
-        "reward_for_picking_up": 1,
+        "reward_for_picking_up": 10,
         "reward_for_stealing": -200,
         "randomize": False,
+        'num_free_pellets': 6,
+        'num_owned_pellets': 6,
     },
     "reward_model": {
         "type": "NonImageCnnRewardNet",
@@ -71,7 +101,7 @@ config = {
     # If fragment_length is None, then the whole trajectory is used as a single fragment.
     "fragment_length": 10,
     "transition_oversampling": 10,
-    "initial_epoch_multiplier": 1.0,
+    "initial_epoch_multiplier": 4.0,
     "feedback": {
         "type": "preference",
     },
@@ -131,11 +161,13 @@ timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 run = wandb.init(
     project="assisting-bounded-humans",
     notes="Full Observability - PPO - 5x5",
-    name="FO-PPO-5x5",
+    name="FO-PPO-5x5_6x6",
     tags=[
         "Train Run",
         "Full Observability",
         "Mask : None",
+        "PPO",
+        "Vectorized - 8",
         f"{config['environment']['grid_size']}x{config['environment']['grid_size']}",
         f"{config['environment']['horizon']} horizon",
         f"Epochs: {config['reward_trainer']['num_epochs']}",
@@ -150,28 +182,52 @@ run = wandb.init(
 ################################################## Create everything ##################################################
 #######################################################################################################################
 
-
-env = StealingGridworld(
-    grid_size=wandb.config["environment"]["grid_size"],
-    horizon=wandb.config["environment"]["horizon"],
-    reward_for_depositing=wandb.config["environment"]["reward_for_depositing"],
-    reward_for_picking_up=wandb.config["environment"]["reward_for_picking_up"],
-    reward_for_stealing=wandb.config["environment"]["reward_for_stealing"],
-    seed=wandb.config["seed"],
-    randomize=wandb.config["environment"]["randomize"],
-)
-
-
-reward_net = NonImageCnnRewardNet(
-    env.observation_space,
-    env.action_space,
-    hid_channels=wandb.config["reward_model"]["hid_channels"],
-    kernel_size=wandb.config["reward_model"]["kernel_size"],
-)
-
-env.alt_reward_fn = reward_net
-
 rng = np.random.default_rng(wandb.config["seed"])
+
+# env = StealingGridworld(
+#     grid_size=wandb.config["environment"]["grid_size"],
+#     horizon=wandb.config["environment"]["horizon"],
+#     reward_for_depositing=wandb.config["environment"]["reward_for_depositing"],
+#     reward_for_picking_up=wandb.config["environment"]["reward_for_picking_up"],
+#     reward_for_stealing=wandb.config["environment"]["reward_for_stealing"],
+#     seed=wandb.config["seed"],
+#     randomize=wandb.config["environment"]["randomize"],
+#     n_envs=4,
+# )
+
+from utils import make_vec_env
+
+
+#Create a vectorized environment with 4 parallel StealingGridworld environments
+venv = make_vec_env(
+    env_name='StealingGridworld',  # This string is not used but kept for uniformity
+    rng=rng,
+    n_envs=8,
+    log_dir='logs/stealing_gridworld',
+    env_make_kwargs=config["environment"],
+    is_custom=True,  # Indicate that this is a custom environment
+    parallel = False
+)
+
+# Is it possible to access the individual environments in the vectorized environment?
+
+
+
+# reward_net = NonImageCnnRewardNet(
+#     env.observation_space,
+#     env.action_space,
+#     hid_channels=wandb.config["reward_model"]["hid_channels"],
+#     kernel_size=wandb.config["reward_model"]["kernel_size"],
+# )
+
+# env.alt_reward_fn = reward_net
+
+from imitation.rewards.reward_nets import BasicRewardNet
+
+reward_net = BasicRewardNet(
+    venv.observation_space, venv.action_space
+)
+
 
 if GPU_NUMBER is not None:
     device = th.device(f"cuda:{GPU_NUMBER}" if th.cuda.is_available() else "mps" if th.backends.mps.is_available() else 'cpu')
@@ -229,12 +285,37 @@ else:
     )
 
 ### I think that as long as we are in ValueIteration, this can stay like this?
-trajectory_generator = DeterministicMDPTrajGenerator(
+# trajectory_generator = DeterministicMDPTrajGenerator(
+#     reward_fn=reward_net,
+#     env=env,
+#     rng=None,  # This doesn't work yet
+#     epsilon=wandb.config["trajectory_generator"]["epsilon"],
+#     wandb_run=run,
+
+# )
+
+from stable_baselines3 import PPO
+from imitation.policies.base import FeedForward32Policy
+from imitation_modules import CustomCNNPolicy
+
+
+agent = PPO(
+    policy=CustomCNNPolicy,
+    env=venv,
+    seed=config['seed'],
+    n_steps=2048,
+    learning_rate=3e-4,
+    n_epochs=10,
+)
+
+from imitation_modules import preference_comparisons
+
+trajectory_generator = preference_comparisons.AgentTrainer(
+    algorithm=agent,
     reward_fn=reward_net,
-    env=env,
-    rng=None,  # This doesn't work yet
-    epsilon=wandb.config["trajectory_generator"]["epsilon"],
-    wandb_run=run,
+    venv=venv,
+    exploration_frac=0.05,
+    rng=rng,
 )
 
 
@@ -309,7 +390,7 @@ if config["feedback"]["type"] == 'scalar':
 else:
     result = reward_learner.train(
         # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
-        total_timesteps=10 * N_ITER * wandb.config["environment"]["horizon"],
+        total_timesteps=1000 * N_ITER * wandb.config["environment"]["horizon"],
         total_comparisons=N_COMPARISONS,
         callback=save_model_params_and_dataset_callback,
     )

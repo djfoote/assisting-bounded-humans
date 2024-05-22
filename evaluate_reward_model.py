@@ -32,11 +32,29 @@ class PolicyEvaluator:
             raise ValueError("No trajectories to evaluate!")
         return {condition: len(self.bad_trajs_sorted[condition]) / len(self.trajs) for condition in self.conditions}
 
-    def evaluate(self, policy, env, num_trajs=100):
-        trajs = [
-            env.rollout_with_policy(policy)
-            for _ in tqdm.tqdm(list(range(num_trajs)), desc="Rollouts for evaluation")
-        ]
+    # def evaluate(self, policy, env, num_trajs=100):
+    #     trajs = [
+    #         minienv.unwrapped.rollout_with_policy(policy)
+    #         for _ in tqdm.tqdm(list(range(num_trajs)), desc="Rollouts for evaluation") for minienv in env.envs 
+    #     ]
+    #     self.sort(trajs)
+    #     return self.get_proportion_of_bad_trajectories(), self.get_proportion_per_condition()
+
+    def evaluate(self, policy, venv, num_trajs=100):
+        trajs = []
+        self.vec_env = venv
+        num_envs = self.vec_env.num_envs
+        num_batches = (num_trajs + num_envs - 1) // num_envs
+
+        for _ in tqdm.tqdm(range(num_batches), desc="Rollouts for evaluation"):
+            obs = self.vec_env.reset()
+            done = np.zeros(num_envs, dtype=bool)
+            while not np.all(done):
+                actions = policy(obs)
+                obs, rewards, dones, infos = self.vec_env.step(actions)
+                done |= dones
+            trajs.extend([self.vec_env.get_traj(i) for i in range(num_envs)])  # Assuming the vec_env can provide individual trajectories
+
         self.sort(trajs)
         return self.get_proportion_of_bad_trajectories(), self.get_proportion_per_condition()
 

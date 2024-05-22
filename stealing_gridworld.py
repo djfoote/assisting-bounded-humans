@@ -33,9 +33,9 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
     def __init__(
         self,
-        grid_size=5,
+        grid_size=3,
         num_free_pellets=2,
-        num_owned_pellets=1,
+        num_owned_pellets=2,
         reward_for_depositing=1,
         reward_for_picking_up=0,
         reward_for_stealing=-2,
@@ -44,6 +44,8 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         horizon=100,
         reward_fn=None,
         seed=None,
+        num_envs=1,
+        **kwargs,
     ):
         self.reward_for_depositing = reward_for_depositing
         self.reward_for_picking_up = reward_for_picking_up
@@ -79,6 +81,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         self.horizon = horizon
 
         self.action_space = spaces.Discrete(5)  # 0: up, 1: down, 2: left, 3: right, 4: interact
+        
 
         self.categorical_spaces = [spaces.Discrete(self.num_pellets + 1)]
 
@@ -105,6 +108,9 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         self.seed = seed
         if seed is not None:
             np.random.seed(seed)
+
+        self.num_envs = num_envs
+        self._actions = None
 
         self.reset()
 
@@ -138,8 +144,28 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                 done=np.zeros_like(state, dtype=bool),
             )
         return reward[0]
+    
+    def step_async(self, actions):
+        """Store the actions given by the vectorized environment to be executed later."""
+        self._actions = [actions] if actions.ndim == 1 else actions
 
-    def step(self, action, sample=False):
+    def step_wait(self):
+        """Execute the actions stored by step_async."""
+        if self._actions is None:
+            raise RuntimeError("step_async must be called before step_wait")
+
+        observations, rewards, dones, infos = [], [], [], []
+        # Assume self._actions is a list of actions for each parallel environment instance
+        for action in self._actions:
+            observation, reward, done, info = self.step(action)
+            observations.append(observation)
+            rewards.append(reward)
+            dones.append(done)
+            infos.append(info)
+        
+        return observations, rewards, dones, infos
+
+    def step(self, action, sample=True):
         self.steps += 1
 
         # Default reward
@@ -167,8 +193,8 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         # truncated is typically for if the goal is reached so...
         # TODO: implement a goal?
         truncated = done
-
         return self._get_observation(), reward, truncated, done, {}
+
 
     def successor(self, state, action):
         """
@@ -359,7 +385,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             image[2, pellet_location[0], pellet_location[1]] = np.array([1], dtype=np.int16)
         image[3, self.home_location[0], self.home_location[1]] = np.array([1], dtype=np.int16)
         categorical = np.full((1, self.grid_size, self.grid_size), num_carried_pellets, dtype=np.int16)
-        return np.concatenate([image, categorical], axis=0).flatten()
+        return np.concatenate([image, categorical], axis=0)
 
     def _get_random_locations(self, n=1, excluding=None):
         """
@@ -393,6 +419,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             StealingGridworld.DOWN: np.array([1, 0]),
             StealingGridworld.LEFT: np.array([0, -1]),
             StealingGridworld.RIGHT: np.array([0, 1]),
+            StealingGridworld.INTERACT: np.array([0, 0]),
         }[action]
 
     @staticmethod
@@ -676,8 +703,17 @@ class PartialGridVisibility(ObservationFunction):
     def process_preference_feedback(self, fragment_pair):
         processed_fragments = []
         for fragment in fragment_pair:
-            masked_obs = fragment.obs[:, :-1] * self.visibility_mask[np.newaxis, np.newaxis]
-            new_obs = np.concatenate([masked_obs, fragment.obs[:, -1:]], axis=1)
+
+            # reshape flattened observation to 3D if needed
+            if len(fragment.obs.shape) == 2: # loophole to handle the case where the observation is flattened by PPO
+                observation = fragment.obs.reshape(-1, 5, self.grid_size, self.grid_size)
+                masked_obs = observation[:, :-1] * self.visibility_mask[np.newaxis, np.newaxis]
+                new_obs = np.concatenate([masked_obs, observation[:, -1:]], axis=1)
+            else:
+                masked_obs = fragment.obs[:, :-1] * self.visibility_mask[np.newaxis, np.newaxis]
+                new_obs = np.concatenate([masked_obs, fragment.obs[:, -1:]], axis=1)
+            
+            
             agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
             new_rew = fragment.rews * agent_visible
             processed_fragments.append(TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, new_rew))
