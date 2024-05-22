@@ -71,8 +71,8 @@ class AsyncEnvWrapper(gym.Wrapper):
 
 GPU_NUMBER = 0
 N_ITER = 60
-N_COMPARISONS = 10_000
-TESTING = True
+N_COMPARISONS = 5000 #10_000
+TESTING = False
 
 
 #######################################################################################################################
@@ -109,17 +109,17 @@ config = {
         "epsilon": 0.1,
     },
     "visibility": {
-        #"visibility": "partial",
-        "visibility": "full",
+        "visibility": "partial",
+        #"visibility": "full",
         # Available visibility mask keys:
         # "full": All of the grid is visible. Not actually used, but should be set for easier comparison.
         # "(n-1)x(n-1)": All but the outermost ring of the grid is visible.
-        #"visibility_mask_key": "(n-1)x(n-1)",
+        "visibility_mask_key": "(n-1)x(n-1)",
         #"visibility_mask_key": "camera",
-        "visibility_mask_key": "full",
+        #"visibility_mask_key": "full",
     },
     "reward_trainer": {
-        "num_epochs": 5,
+        "num_epochs": 8,
     },
 }
 
@@ -176,6 +176,7 @@ run = wandb.init(
     ],
     config=config,
     mode="disabled" if TESTING else "online",
+    monitor_gym=False,  # auto-upload the videos of agents playing the game
 )
 
 #######################################################################################################################
@@ -208,9 +209,15 @@ venv = make_vec_env(
     is_custom=True,  # Indicate that this is a custom environment
     parallel = False
 )
+from stable_baselines3.common.vec_env import VecMonitor, VecVideoRecorder
+venv = VecMonitor(venv, filename="logs/stealing_gridworld/monitor.csv")
 
-# Is it possible to access the individual environments in the vectorized environment?
-
+# venv = VecVideoRecorder(
+#     venv,
+#     f"videos/{run.id}",
+#     record_video_trigger=lambda x: x % 2000 == 0,
+#     video_length=200,
+# )
 
 
 # reward_net = NonImageCnnRewardNet(
@@ -247,7 +254,7 @@ if wandb.config["visibility"]["visibility"] == "partial":
     #     wandb.config["visibility"]["visibility_mask_key"],
     # )
     if wandb.config["visibility"]["visibility_mask_key"] == "(n-1)x(n-1)":
-        observation_function = PartialGridVisibility(env, mask_key = wandb.config["visibility"]["visibility_mask_key"], feedback=config["feedback"]["type"])
+        observation_function = PartialGridVisibility(venv, mask_key = wandb.config["visibility"]["visibility_mask_key"], feedback=config["feedback"]["type"])
         print("Debug new observation function: ", observation_function)
         policy_evaluator = partial_visibility_evaluator_factory(observation_function.visibility_mask)
     elif wandb.config["visibility"]["visibility_mask_key"] == "camera":
@@ -306,6 +313,8 @@ agent = PPO(
     n_steps=2048,
     learning_rate=3e-4,
     n_epochs=10,
+    verbose=1,
+    tensorboard_log=f"runs/{run.id}"
 )
 
 from imitation_modules import preference_comparisons
@@ -379,6 +388,8 @@ else:
 ####################################################### Training ######################################################
 #######################################################################################################################
 
+from wandb.integration.sb3 import WandbCallback
+
 if config["feedback"]["type"] == 'scalar':
     result = reward_learner.train(
         # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
@@ -390,8 +401,13 @@ if config["feedback"]["type"] == 'scalar':
 else:
     result = reward_learner.train(
         # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
-        total_timesteps=1000 * N_ITER * wandb.config["environment"]["horizon"],
+        total_timesteps=10000 * N_ITER * wandb.config["environment"]["horizon"],
         total_comparisons=N_COMPARISONS,
-        callback=save_model_params_and_dataset_callback,
+        #callback=save_model_params_and_dataset_callback,
+        callback=WandbCallback(
+        gradient_save_freq=100,
+        model_save_path=f"models/{run.id}",
+        verbose=2,
+    ),
     )
     

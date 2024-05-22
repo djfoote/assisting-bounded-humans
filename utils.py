@@ -1,14 +1,22 @@
+from stealing_gridworld import StealingGridworld
 import gym
-import os
 import functools
 from typing import Callable, List, Mapping, Optional, Sequence, Union, Any
 import numpy as np
 #from gym.wrappers import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecEnv
-from gymnasium.wrappers import FlattenObservation
+import warnings
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+import gymnasium as gym
+import numpy as np
+
+from stable_baselines3.common import type_aliases
+from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped
+from imitation.data.types import TrajectoryWithRew
 
 
-from stealing_gridworld import StealingGridworld
+
 
 def make_vec_env(
     env_name: str,
@@ -49,20 +57,9 @@ def make_vec_env(
         # Seed each environment with a different, non-sequential seed for diversity
         env.seed = this_seed
 
-        # Optionally wrap each environment in a Monitor for logging
-        log_path = None
-        # if log_dir is not None:
-        #     log_subdir = os.path.join(log_dir, "monitor")
-        #     os.makedirs(log_subdir, exist_ok=True)
-        #     log_path = os.path.join(log_subdir, f"mon{i:03d}")
-        #env = Monitor(env, log_path)
-
         # Apply additional wrappers if any
         if post_wrappers:
-            #for wrapper in post_wrappers:
-            #    env = wrapper(env, i)
             env = post_wrappers(env)
-
 
         #return FlattenObservation(env)
         return env
@@ -90,3 +87,119 @@ def make_seeds(
         return seeds_list[0]
     else:
         return seeds_list
+    
+
+from typing import List, Dict, Any, Tuple, Optional, Union, Callable
+import numpy as np
+import gym
+import warnings
+from gym import spaces
+from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, is_vecenv_wrapped
+from imitation.data.types import TrajectoryWithRew  # Import the TrajectoryWithRew class
+
+from typing import List, Dict, Any, Tuple, Optional, Union, Callable
+import numpy as np
+import gym
+import warnings
+from gym import spaces
+from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, is_vecenv_wrapped
+from imitation.data.types import TrajectoryWithRew  # Import the TrajectoryWithRew class
+
+def evaluate_policy(
+    model: "type_aliases.PolicyPredictor",
+    env: Union[gym.Env, VecEnv],
+    n_eval_episodes: int = 10,
+    deterministic: bool = True,
+    render: bool = False,
+    callback: Optional[Callable[[Dict[str, Any], Dict[str, Any]], None]] = None,
+    reward_threshold: Optional[float] = None,
+    return_episode_rewards: bool = False,
+    return_trajectories: bool = False,
+    warn: bool = True,
+) -> Union[Tuple[float, float], Tuple[List[float], List[int]], Tuple[List[float], List[int], List[TrajectoryWithRew]]]:
+    from stable_baselines3.common.monitor import Monitor
+
+    if not isinstance(env, VecEnv):
+        env = DummyVecEnv([lambda: env])
+
+    is_monitor_wrapped = is_vecenv_wrapped(env, VecMonitor)
+
+    if not is_monitor_wrapped and warn:
+        warnings.warn(
+            "Evaluation environment is not wrapped with a ``Monitor`` wrapper. "
+            "This may result in reporting modified episode lengths and rewards, if other wrappers happen to modify these. "
+            "Consider wrapping environment first with ``Monitor`` wrapper.",
+            UserWarning,
+        )
+
+    n_envs = env.num_envs
+    episode_rewards = []
+    episode_lengths = []
+    trajectories = [None] * n_envs
+
+    episode_counts = np.zeros(n_envs, dtype=int)
+    episode_count_targets = np.array([(n_eval_episodes + i) // n_envs for i in range(n_envs)], dtype=int)
+
+    current_rewards = np.zeros(n_envs)
+    current_lengths = np.zeros(n_envs, dtype=int)
+    # observations = env.reset()
+    
+    
+    states = None
+    episode_starts = np.ones(n_envs, dtype=bool)
+    while (episode_counts < episode_count_targets).any():
+        actions, states = model.predict(observations, state=states, episode_start=episode_starts, deterministic=deterministic)
+        new_observations, rewards, dones, infos = env.step(actions)
+
+        for i in range(n_envs):
+            if trajectories[i] is None:
+                trajectories[i] = {
+                    'obs': [],
+                    'acts': [],
+                    'rews': [],
+                    'terminal': False,
+                    'infos': None
+                }
+
+            trajectories[i]['obs'].append(observations[i])
+            trajectories[i]['acts'].append(actions[i])
+            trajectories[i]['rews'].append(rewards[i])
+
+            current_rewards[i] += rewards[i]
+            current_lengths[i] += 1
+
+            if dones[i]:
+                trajectories[i]['terminal'] = dones[i]
+                episode_rewards.append(current_rewards[i])
+                episode_lengths.append(current_lengths[i])
+                episode_counts[i] += 1
+                current_rewards[i] = 0
+                current_lengths[i] = 0
+                # Convert list data to TrajectoryWithRew
+                completed_trajectory = TrajectoryWithRew(
+                    obs=np.array(trajectories[i]['obs'], dtype=np.int16),
+                    acts=np.array(trajectories[i]['acts'], dtype=np.int16),
+                    rews=np.array(trajectories[i]['rews'], dtype=float),
+                    terminal=trajectories[i]['terminal'],
+                    infos=trajectories[i]['infos']
+                )
+                trajectories[i] = completed_trajectory
+                trajectories[i] = None
+
+        observations = new_observations
+        if render:
+            env.render()
+
+    # Filter out any None placeholders left from incomplete episodes
+    trajectories = [traj for traj in trajectories if traj is not None]
+
+    mean_reward = np.mean(episode_rewards)
+    std_reward = np.std(episode_rewards)
+    if reward_threshold is not None:
+        assert mean_reward > reward_threshold, f"Mean reward below threshold: {mean_reward:.2f} < {reward_threshold:.2f}"
+
+    if return_episode_rewards and not return_trajectories:
+        return episode_rewards, episode_lengths
+    elif return_trajectories:
+        return episode_rewards, episode_lengths, trajectories
+    return mean_reward, std_reward

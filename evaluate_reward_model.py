@@ -1,6 +1,7 @@
 import abc
 import numpy as np
 import tqdm
+from utils import evaluate_policy
 
 
 class PolicyEvaluator:
@@ -40,22 +41,12 @@ class PolicyEvaluator:
     #     self.sort(trajs)
     #     return self.get_proportion_of_bad_trajectories(), self.get_proportion_per_condition()
 
-    def evaluate(self, policy, venv, num_trajs=100):
-        trajs = []
-        self.vec_env = venv
-        num_envs = self.vec_env.num_envs
-        num_batches = (num_trajs + num_envs - 1) // num_envs
-
-        for _ in tqdm.tqdm(range(num_batches), desc="Rollouts for evaluation"):
-            obs = self.vec_env.reset()
-            done = np.zeros(num_envs, dtype=bool)
-            while not np.all(done):
-                actions = policy(obs)
-                obs, rewards, dones, infos = self.vec_env.step(actions)
-                done |= dones
-            trajs.extend([self.vec_env.get_traj(i) for i in range(num_envs)])  # Assuming the vec_env can provide individual trajectories
-
-        self.sort(trajs)
+    def evaluate(self, policy, env, num_trajs=100):
+        episode_rewards, episode_lengths, trajectories = evaluate_policy(policy, env, num_trajs, return_trajectories=True)
+        print(f"Evaluated {len(trajectories)} trajectories.")
+        print(f"Episode rewards: {episode_rewards}")
+        print(f"Episode lengths: {episode_lengths}")
+        self.sort(trajectories)
         return self.get_proportion_of_bad_trajectories(), self.get_proportion_per_condition()
 
 

@@ -7,6 +7,8 @@ import tqdm
 from gymnasium import spaces
 
 from imitation.data.types import TrajectoryWithRew
+from stable_baselines3.common.vec_env import VecEnv
+from typing import Union
 
 from deterministic_mdp import DeterministicMDP
 from imitation_modules import ObservationFunction
@@ -67,10 +69,10 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             self.num_owned_pellets = num_owned_pellets
         self.num_pellets = num_free_pellets + num_owned_pellets
         
-        print('Using the following environment parameters:')
-        print(f'Grid size: {self.grid_size}')
-        print(f'Number of free pellets: {self.num_free_pellets}')
-        print(f'Number of owned pellets: {self.num_owned_pellets}')
+        # print('Using the following environment parameters:')
+        # print(f'Grid size: {self.grid_size}')
+        # print(f'Number of free pellets: {self.num_free_pellets}')
+        # print(f'Number of owned pellets: {self.num_owned_pellets}')
             
 
         self.params_string = (
@@ -672,9 +674,9 @@ class PartialGridVisibility(ObservationFunction):
     # in order to make it more general and reusable. Also avoids having to pass it as an argument.
     # The possible visibility masks for now are the default one, and a camera-like one.
 
-    def __init__(self, env: StealingGridworld, mask_key = None, feedback="scalar", *args, **kwargs):
+    def __init__(self, env: Union[gym.Env, VecEnv], mask_key = None, feedback="scalar", *args, **kwargs):
         self.env = env
-        self.grid_size = env.grid_size
+        self.grid_size = self.env.envs[0].grid_size
         self.visibility_mask = self.construct_visibility_mask(mask_key)
         self.feedback = feedback
 

@@ -44,7 +44,6 @@ from tqdm.auto import tqdm
 
 import value_iteration
 from stable_baselines3 import PPO
-from gymnasium.wrappers import FlattenObservation
 from wandb.integration.sb3 import WandbCallback
 
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
@@ -1828,21 +1827,21 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             #     with networks.evaluating(self.model):
             #         prop_bad, prop_bad_per_condition = self.policy_evaluator.evaluate(
             #             policy=self.trajectory_generator.algorithm, # was self.trajectory_generator.policy,
-            #             venv=self.trajectory_generator.venv,
+            #             env=self.trajectory_generator.venv,
             #             num_trajs=1000,
             #         )
             #         self.logger.record("policy_behavior/prop_bad_rollouts", prop_bad)
             #         for condition, prop in prop_bad_per_condition.items():
             #             self.logger.record(f"policy_behavior/prop_bad_rollouts_{condition}", prop)
 
-            # self.logger.dump(self._iteration)
+            self.logger.dump(self._iteration)
 
             ########################
             # Additional Callbacks #
             ########################
-            if callback:
+#           if callback:
                 #callback(self._iteration)
-                callback(self)
+#                callback(self)
             self._iteration += 1
 
         return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}
