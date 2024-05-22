@@ -54,7 +54,6 @@ from stable_baselines3.common.policies import ActorCriticPolicy
 class CustomCNNFeaturesExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space, features_dim=256):
         super(CustomCNNFeaturesExtractor, self).__init__(observation_space, features_dim)
-        # Assuming observation space is channels x width x height
         n_input_channels = observation_space.shape[0]
         self.cnn = nn.Sequential(
             nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1),
