@@ -1,32 +1,19 @@
 import abc
-import math
 import itertools
+import math
 import pickle
 import re
 import time
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    List,
-    Mapping,
-    NamedTuple,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 import torch as th
-from torch import nn
-from torch.utils import data as data_th
 from gymnasium import spaces
 from imitation.algorithms import base, preference_comparisons
 from imitation.algorithms.preference_comparisons import (
     Fragmenter, PreferenceGatherer, PreferenceDataset,
-    preference_collate_fn, TrajectoryGenerator, _make_reward_trainer,)
+    preference_collate_fn, TrajectoryGenerator, _make_reward_trainer,
+)
 from imitation.data import rollout, types
 from imitation.data.types import (
     TrajectoryPair,
@@ -36,44 +23,18 @@ from imitation.data.types import (
 )
 from imitation.regularization import regularizers
 from imitation.rewards.reward_nets import RewardNet, RewardEnsemble, AddSTDRewardWrapper
-from imitation.util import logger as imit_logger
-from imitation.util import networks, util
+from imitation.util import logger as imit_logger, networks, util
 from scipy import special
-from stable_baselines3.common import type_aliases
-from tqdm.auto import tqdm
-
-import value_iteration
 from stable_baselines3 import PPO
+from stable_baselines3.common import type_aliases, policies, torch_layers
+from torch import nn
+from torch.utils import data as data_th
+from tqdm.auto import tqdm
 from wandb.integration.sb3 import WandbCallback
 
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3 import PPO
-from stable_baselines3.common.policies import ActorCriticPolicy
+import value_iteration
 
-class CustomCNNFeaturesExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space, features_dim=256):
-        super(CustomCNNFeaturesExtractor, self).__init__(observation_space, features_dim)
-        n_input_channels = observation_space.shape[0]
-        self.cnn = nn.Sequential(
-            nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(64 * observation_space.shape[1] * observation_space.shape[2], features_dim),
-            nn.ReLU(),
-        )
-
-    def forward(self, observations):
-        return self.cnn(observations)
-
-# Custom Policy that uses the CNN
-class CustomCNNPolicy(ActorCriticPolicy):
-    def __init__(self, observation_space, action_space, lr_schedule, features_extractor_class=CustomCNNFeaturesExtractor, **kwargs):
-        super(CustomCNNPolicy, self).__init__(observation_space, action_space, lr_schedule, features_extractor_class=features_extractor_class, **kwargs)
-
-
-
+# Useless in this context... superseeded
 class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
     """
     A trajectory generator for a deterministic MDP that can be solved exactly using value iteration.
@@ -214,40 +175,89 @@ class NonImageCnnRewardNet(RewardNet):
         return rewards
 
 
+# TODO (joan): I guess I was doing this wrong? Was probably meant to fit any model, not just value iteration.
+
+# class SyntheticValueGatherer(preference_comparisons.SyntheticGatherer):
+#     """
+#     Computes synthetic preferences by a weighted combination of ground-truth environment rewards (present in the
+#     trajectory fragment) and ground-truth optimal value at the end of the trajectory fragment (computed using PPO).
+#     """
+
+#     def __init__(
+#         self,
+#         env,
+#         temperature=1.0,
+#         rlhf_gamma=1.0,
+#         sample=True,
+#         rng=None,
+#         threshold=50,
+#         vi_horizon=None,
+#         vi_gamma=0.99,
+#         value_coeff=0.1,  # weight of value in synthetic reward
+#         custom_logger=None,
+#     ):
+#         super().__init__(temperature, rlhf_gamma, sample, rng, threshold, custom_logger)
+
+#         self.env = env
+#         self.vi_horizon = vi_horizon
+#         self.vi_gamma = vi_gamma
+
+#         self.value_coeff = value_coeff
+
+#         _, self.values = value_iteration.get_optimal_policy_and_values(
+#             self.env, gamma=self.vi_gamma, horizon=self.vi_horizon
+#         )
+
+#     def _get_value(self, state):
+#         return self.values[self.env.get_state_index(state)]
+
+#     def _augment_fragment_pair_with_value(self, fragment_pair):
+#         new_fragments = []
+#         for fragment in fragment_pair:
+#             final_state = fragment.obs[-1]
+#             value = self._get_value(final_state)
+#             new_rews = np.copy(fragment.rews)
+#             new_rews[-1] += self.value_coeff * value
+#             new_fragments.append(
+#                 TrajectoryWithRew(fragment.obs, fragment.acts, fragment.infos, fragment.terminal, new_rews)
+#             )
+#         return tuple(new_fragments)
+
+#     def __call__(self, fragment_pairs):
+#         fragment_pairs = [self._augment_fragment_pair_with_value(fp) for fp in fragment_pairs]
+#         return super().__call__(fragment_pairs)
+
+
 class SyntheticValueGatherer(preference_comparisons.SyntheticGatherer):
     """
     Computes synthetic preferences by a weighted combination of ground-truth environment rewards (present in the
-    trajectory fragment) and ground-truth optimal value at the end of the trajectory fragment (computed using value
-    iteration).
+    trajectory fragment) and ground-truth optimal value at the end of the trajectory fragment (computed using PPO).
     """
 
     def __init__(
         self,
         env,
+        model,  # PPO model
         temperature=1.0,
         rlhf_gamma=1.0,
         sample=True,
         rng=None,
         threshold=50,
-        vi_horizon=None,
-        vi_gamma=0.99,
         value_coeff=0.1,  # weight of value in synthetic reward
         custom_logger=None,
     ):
         super().__init__(temperature, rlhf_gamma, sample, rng, threshold, custom_logger)
-
         self.env = env
-        self.vi_horizon = vi_horizon
-        self.vi_gamma = vi_gamma
-
+        self.model = model
         self.value_coeff = value_coeff
 
-        _, self.values = value_iteration.get_optimal_policy_and_values(
-            self.env, gamma=self.vi_gamma, horizon=self.vi_horizon
-        )
-
     def _get_value(self, state):
-        return self.values[self.env.get_state_index(state)]
+        # Get value estimate from PPO model's critic network
+        # Ensure state is properly preprocessed and in the right shape/format for prediction
+        state_tensor = self.env.observation_space.flatten(state).unsqueeze(0)
+        with th.no_grad():
+            value_tensor = self.model.policy.evaluate_actions(state_tensor, None)[1]
+        return value_tensor.numpy().flatten()[0]
 
     def _augment_fragment_pair_with_value(self, fragment_pair):
         new_fragments = []
@@ -264,6 +274,7 @@ class SyntheticValueGatherer(preference_comparisons.SyntheticGatherer):
     def __call__(self, fragment_pairs):
         fragment_pairs = [self._augment_fragment_pair_with_value(fp) for fp in fragment_pairs]
         return super().__call__(fragment_pairs)
+    
 
 
 class ScalarFeedbackDataset(data_th.Dataset):
@@ -312,7 +323,6 @@ class RandomSingleFragmenter(preference_comparisons.RandomFragmenter):
 
     def __call__(self, trajectories, fragment_length, num_fragments):
         fragment_pairs = super().__call__(trajectories, fragment_length, int(np.ceil(num_fragments // 2)))
-        # fragment_pairs is a list of (fragment, fragment) tuples. We want to flatten this into a list of fragments.
         return list(itertools.chain.from_iterable(fragment_pairs))
 
 
@@ -358,8 +368,6 @@ class ScalarFeedbackGatherer(abc.ABC):
 
 class SyntheticScalarFeedbackGatherer(ScalarFeedbackGatherer):
     """Computes synthetic scalar feedback using ground-truth environment rewards."""
-
-    # TODO: This is a placeholder for a more sophisticated synthetic feedback gatherer.
 
     def __call__(self, fragments, limits=None):
         return [np.sum(fragment.rews) for fragment in fragments]
@@ -1174,55 +1182,7 @@ class RewardLoss(nn.Module, abc.ABC):
             metrics: a dictionary of metrics that can be logged
         """
 
-# class CrossEntropyRewardLoss(RewardLoss):
-#     """Compute the cross entropy reward loss."""
-
-#     def __init__(self) -> None:
-#         """Create cross entropy reward loss."""
-#         super().__init__()
-
-#     def forward(
-#         self,
-#         fragment_pairs: Sequence[TrajectoryPair],
-#         preferences: np.ndarray,
-#         preference_model: PreferenceModel,
-#     ) -> LossAndMetrics:
-#         """Computes the loss.
-
-#         Args:
-#             fragment_pairs: Batch consisting of pairs of trajectory fragments.
-#             preferences: The probability that the first fragment is preferred
-#                 over the second. Typically 0, 1 or 0.5 (tie).
-#             preference_model: model to predict the preferred fragment from a pair.
-
-#         Returns:
-#             The cross-entropy loss between the probability predicted by the
-#                 reward model and the target probabilities in `preferences`. Metrics
-#                 are accuracy, and gt_reward_loss, if the ground truth reward is
-#                 available.
-#         """
-#         probs, gt_probs = preference_model(fragment_pairs)
-#         # TODO(ejnnr): Here and below, > 0.5 is problematic
-#         #  because getting exactly 0.5 is actually somewhat
-#         #  common in some environments (as long as sample=False or temperature=0).
-#         #  In a sense that "only" creates class imbalance
-#         #  but it's still misleading.
-#         predictions = probs > 0.5
-#         preferences_th = th.as_tensor(preferences, dtype=th.float32)
-#         ground_truth = preferences_th > 0.5
-#         metrics = {}
-#         metrics["accuracy"] = (predictions == ground_truth).float().mean()
-#         if gt_probs is not None:
-#             metrics["gt_reward_loss"] = th.nn.functional.binary_cross_entropy(
-#                 gt_probs,
-#                 preferences_th,
-#             )
-#         metrics = {key: value.detach().cpu() for key, value in metrics.items()}
-#         return LossAndMetrics(
-#             loss=th.nn.functional.binary_cross_entropy(probs, preferences_th),
-#             metrics=metrics,
-#         )
-
+# My implementation of the cross entropy loss, addressing issue of ties in the preferences
 class CrossEntropyRewardLoss(RewardLoss):
     """Compute the cross entropy reward loss."""
 
@@ -1823,25 +1783,28 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
             # Log information #
             ###################
 
-            # if self.policy_evaluator is not None:
-            #     with networks.evaluating(self.model):
-            #         prop_bad, prop_bad_per_condition = self.policy_evaluator.evaluate(
-            #             policy=self.trajectory_generator.algorithm, # was self.trajectory_generator.policy,
-            #             env=self.trajectory_generator.venv,
-            #             num_trajs=1000,
-            #         )
-            #         self.logger.record("policy_behavior/prop_bad_rollouts", prop_bad)
-            #         for condition, prop in prop_bad_per_condition.items():
-            #             self.logger.record(f"policy_behavior/prop_bad_rollouts_{condition}", prop)
+            if self.policy_evaluator is not None:
+                with networks.evaluating(self.model):
+                    prop_bad, prop_bad_per_condition, episode_rewards, episode_lengths = self.policy_evaluator.evaluate(
+                        policy=self.trajectory_generator.algorithm, # was self.trajectory_generator.policy,
+                        env=self.trajectory_generator.venv,
+                        num_trajs=1000,
+                    )
+                    self.logger.record("policy_behavior/prop_bad_rollouts", prop_bad)
+                    for condition, prop in prop_bad_per_condition.items():
+                        self.logger.record(f"policy_behavior/prop_bad_rollouts_{condition}", prop)
+
+                    self.logger.record("policy_behavior/episode_rewards", episode_rewards.mean())
+                    self.logger.record("policy_behavior/episode_lengths", episode_lengths.mean())
 
             self.logger.dump(self._iteration)
 
             ########################
             # Additional Callbacks #
             ########################
-#           if callback:
-                #callback(self._iteration)
-#                callback(self)
+            #if callback:
+                #callback[1](self._iteration)
+                #callback(self)
             self._iteration += 1
 
         return {"reward_loss": reward_loss, "reward_accuracy": reward_accuracy}

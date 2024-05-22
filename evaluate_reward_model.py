@@ -10,44 +10,37 @@ class PolicyEvaluator:
         self.reset()
 
     def reset(self, trajectories=None):
-        self.trajs = trajectories if trajectories is not None else []
+        # Expect trajectories to be a dict with keys as env indices and values as lists of TrajectoryWithRew objects
+        self.trajs = trajectories if trajectories is not None else {}
         self.bad_trajs = []
         self.bad_trajs_sorted = {condition: [] for condition in self.conditions}
 
     def sort(self, trajectories):
         self.reset(trajectories)
-        for traj in self.trajs:
-            bad_traj = False
-            for condition in self.conditions:
-                if condition.applies(traj):
-                    self.bad_trajs_sorted[condition].append(traj)
-                    bad_traj = True
-            if bad_traj:
-                self.bad_trajs.append(traj)
+        for env_index, env_trajectories in self.trajs.items():  # Iterate over each environment's trajectories
+            for traj in env_trajectories:  # Iterate through each trajectory
+                bad_traj = False
+                for condition in self.conditions:
+                    if condition.applies(traj):
+                        self.bad_trajs_sorted[condition].append(traj)
+                        bad_traj = True
+                if bad_traj:
+                    self.bad_trajs.append(traj)
     
     def get_proportion_of_bad_trajectories(self):
-        return len(self.bad_trajs) / len(self.trajs)
+        total_trajectories = sum(len(env_trajs) for env_trajs in self.trajs.values())  # Count all trajectories across all environments
+        return len(self.bad_trajs) / total_trajectories if total_trajectories > 0 else 0
     
     def get_proportion_per_condition(self):
-        if not self.trajs:
+        total_trajectories = sum(len(env_trajs) for env_trajs in self.trajs.values())  # Count all trajectories
+        if total_trajectories == 0:
             raise ValueError("No trajectories to evaluate!")
-        return {condition: len(self.bad_trajs_sorted[condition]) / len(self.trajs) for condition in self.conditions}
-
-    # def evaluate(self, policy, env, num_trajs=100):
-    #     trajs = [
-    #         minienv.unwrapped.rollout_with_policy(policy)
-    #         for _ in tqdm.tqdm(list(range(num_trajs)), desc="Rollouts for evaluation") for minienv in env.envs 
-    #     ]
-    #     self.sort(trajs)
-    #     return self.get_proportion_of_bad_trajectories(), self.get_proportion_per_condition()
+        return {condition: len(self.bad_trajs_sorted[condition]) / total_trajectories for condition in self.conditions}
 
     def evaluate(self, policy, env, num_trajs=100):
         episode_rewards, episode_lengths, trajectories = evaluate_policy(policy, env, num_trajs, return_trajectories=True)
-        print(f"Evaluated {len(trajectories)} trajectories.")
-        print(f"Episode rewards: {episode_rewards}")
-        print(f"Episode lengths: {episode_lengths}")
         self.sort(trajectories)
-        return self.get_proportion_of_bad_trajectories(), self.get_proportion_per_condition()
+        return self.get_proportion_of_bad_trajectories(), self.get_proportion_per_condition(), episode_rewards, episode_lengths
 
 
 class BadTrajectoryCondition(abc.ABC):

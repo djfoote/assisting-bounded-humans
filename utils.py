@@ -1,21 +1,16 @@
-from stealing_gridworld import StealingGridworld
-import gym
 import functools
-from typing import Callable, List, Mapping, Optional, Sequence, Union, Any
-import numpy as np
-#from gym.wrappers import Monitor
-from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecEnv
 import warnings
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import gym
 import gymnasium as gym
 import numpy as np
-
 from stable_baselines3.common import type_aliases
-from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped
+from stealing_gridworld import StealingGridworld
+
 from imitation.data.types import TrajectoryWithRew
-
-
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 
 def make_vec_env(
@@ -89,22 +84,6 @@ def make_seeds(
         return seeds_list
     
 
-from typing import List, Dict, Any, Tuple, Optional, Union, Callable
-import numpy as np
-import gym
-import warnings
-from gym import spaces
-from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, is_vecenv_wrapped
-from imitation.data.types import TrajectoryWithRew  # Import the TrajectoryWithRew class
-
-from typing import List, Dict, Any, Tuple, Optional, Union, Callable
-import numpy as np
-import gym
-import warnings
-from gym import spaces
-from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, is_vecenv_wrapped
-from imitation.data.types import TrajectoryWithRew  # Import the TrajectoryWithRew class
-
 def evaluate_policy(
     model: "type_aliases.PolicyPredictor",
     env: Union[gym.Env, VecEnv],
@@ -140,58 +119,67 @@ def evaluate_policy(
     episode_counts = np.zeros(n_envs, dtype=int)
     episode_count_targets = np.array([(n_eval_episodes + i) // n_envs for i in range(n_envs)], dtype=int)
 
+    print("episode_count_targets: ", episode_count_targets)
+
+    completed_trajectories = {i: [] for i in range(n_envs)}
+
     current_rewards = np.zeros(n_envs)
     current_lengths = np.zeros(n_envs, dtype=int)
-    # observations = env.reset()
-    
+    try:
+        popped_transitions = env.pop_transitions()
+    except:
+        popped_transitions = None
+    observations = env.reset() # TODO (joan): this function calls reset on the env, but then throws an error about the wrapper that wraps the environment
+                                # The issue is given by the buffer wrapper, but unsure how to fix it
     
     states = None
     episode_starts = np.ones(n_envs, dtype=bool)
     while (episode_counts < episode_count_targets).any():
         actions, states = model.predict(observations, state=states, episode_start=episode_starts, deterministic=deterministic)
+
         new_observations, rewards, dones, infos = env.step(actions)
 
-        for i in range(n_envs):
-            if trajectories[i] is None:
+        for i in range(n_envs): # For each environment
+            if trajectories[i] is None: # Initialize trajectory
                 trajectories[i] = {
-                    'obs': [],
+                    'obs': [observations[i]],
                     'acts': [],
                     'rews': [],
                     'terminal': False,
                     'infos': None
                 }
 
-            trajectories[i]['obs'].append(observations[i])
-            trajectories[i]['acts'].append(actions[i])
-            trajectories[i]['rews'].append(rewards[i])
+            trajectories[i]['obs'].append(new_observations[i]) # Append new observation
+            trajectories[i]['acts'].append(actions[i]) # Append action
+            trajectories[i]['rews'].append(rewards[i]) # Append reward
 
-            current_rewards[i] += rewards[i]
-            current_lengths[i] += 1
+            current_rewards[i] += rewards[i] # Update current rewards
+            current_lengths[i] += 1 # Update current lengths
 
-            if dones[i]:
-                trajectories[i]['terminal'] = dones[i]
-                episode_rewards.append(current_rewards[i])
-                episode_lengths.append(current_lengths[i])
-                episode_counts[i] += 1
-                current_rewards[i] = 0
-                current_lengths[i] = 0
+            if dones[i]: # If the episode is done
+                trajectories[i]['terminal'] = dones[i] # Set terminal to True
+                episode_rewards.append(current_rewards[i]) # Append current rewards to episode rewards
+                episode_lengths.append(current_lengths[i]) # Append current lengths to episode lengths
+                episode_counts[i] += 1 # Update episode counts
+                current_rewards[i] = 0 # Reset current rewards
+                current_lengths[i] = 0 # Reset current lengths
                 # Convert list data to TrajectoryWithRew
-                completed_trajectory = TrajectoryWithRew(
+                completed_trajectory = TrajectoryWithRew( # Create TrajectoryWithRew object
                     obs=np.array(trajectories[i]['obs'], dtype=np.int16),
                     acts=np.array(trajectories[i]['acts'], dtype=np.int16),
                     rews=np.array(trajectories[i]['rews'], dtype=float),
                     terminal=trajectories[i]['terminal'],
                     infos=trajectories[i]['infos']
                 )
-                trajectories[i] = completed_trajectory
+                #trajectories[i] = completed_trajectory 
+                completed_trajectories[i].append(completed_trajectory)
                 trajectories[i] = None
 
         observations = new_observations
         if render:
             env.render()
 
-    # Filter out any None placeholders left from incomplete episodes
-    trajectories = [traj for traj in trajectories if traj is not None]
+    #trajectories = [traj for traj in trajectories if traj is not None]
 
     mean_reward = np.mean(episode_rewards)
     std_reward = np.std(episode_rewards)
@@ -201,5 +189,5 @@ def evaluate_policy(
     if return_episode_rewards and not return_trajectories:
         return episode_rewards, episode_lengths
     elif return_trajectories:
-        return episode_rewards, episode_lengths, trajectories
+        return episode_rewards, episode_lengths, completed_trajectories
     return mean_reward, std_reward

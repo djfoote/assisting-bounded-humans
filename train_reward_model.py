@@ -33,35 +33,13 @@ from imitation_modules import (
     PreferenceComparisonNoisyObservationGathererWrapper,
 )
 
-from stealing_gridworld import PartialGridVisibility, DynamicGridVisibility, StealingGridworld
+#from stealing_gridworld import StealingGridworld
+from observability_wrappers import PartialGridVisibility, DynamicGridVisibility
 import datetime
-
 import gym
 
-class AsyncEnvWrapper(gym.Wrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        self._actions = None
-        self._obs = None
-        self._rewards = None
-        self._dones = None
-        self._infos = None
-
-    def step_async(self, actions):
-        """Save actions to be executed in step_wait."""
-        self._actions = actions
-
-    def step_wait(self):
-        """Perform the actual step using the saved actions."""
-        if self._actions is None:
-            raise RuntimeError("step_async must be called before step_wait")
-        self._obs, self._rewards, self._dones, self._infos = self.env.step(self._actions)
-        return self._obs, self._rewards, self._dones, self._infos
-
-    def step(self, action):
-        """Override the step to maintain compatibility with non-vectorized steps."""
-        self.step_async(action)
-        return self.step_wait()
+from stable_baselines3 import PPO
+from customPolicyPPO import CustomCNNPolicy
 
 
 #######################################################################################################################
@@ -71,7 +49,7 @@ class AsyncEnvWrapper(gym.Wrapper):
 
 GPU_NUMBER = 0
 N_ITER = 60
-N_COMPARISONS = 5000 #10_000
+N_COMPARISONS = 10 #10_000
 TESTING = False
 
 
@@ -88,8 +66,8 @@ config = {
         "reward_for_picking_up": 10,
         "reward_for_stealing": -200,
         "randomize": False,
-        'num_free_pellets': 6,
-        'num_owned_pellets': 6,
+        'num_free_pellets': 3,
+        'num_owned_pellets': 2,
     },
     "reward_model": {
         "type": "NonImageCnnRewardNet",
@@ -119,7 +97,7 @@ config = {
         #"visibility_mask_key": "full",
     },
     "reward_trainer": {
-        "num_epochs": 8,
+        "num_epochs": 5,
     },
 }
 
@@ -259,7 +237,7 @@ if wandb.config["visibility"]["visibility"] == "partial":
         policy_evaluator = partial_visibility_evaluator_factory(observation_function.visibility_mask)
     elif wandb.config["visibility"]["visibility_mask_key"] == "camera":
         fragmenter = RandomFragmenter(rng=rng, get_limits=True)
-        observation_function = DynamicGridVisibility(env, feedback=config["feedback"]["type"])
+        observation_function = DynamicGridVisibility(venv, feedback=config["feedback"]["type"])
         print("Debug new observation function: ", observation_function)
         policy_evaluator = camera_visibility_evaluator_factory(observation_function)
 
@@ -301,20 +279,17 @@ else:
 
 # )
 
-from stable_baselines3 import PPO
-from imitation.policies.base import FeedForward32Policy
-from imitation_modules import CustomCNNPolicy
-
 
 agent = PPO(
     policy=CustomCNNPolicy,
     env=venv,
     seed=config['seed'],
     n_steps=2048,
-    learning_rate=3e-4,
     n_epochs=10,
     verbose=1,
-    tensorboard_log=f"runs/{run.id}"
+    tensorboard_log=f"./runs/PPO_1",
+    ent_coef=0.01,
+    learning_rate=0.00025,
 )
 
 from imitation_modules import preference_comparisons
@@ -324,7 +299,7 @@ trajectory_generator = preference_comparisons.AgentTrainer(
     reward_fn=reward_net,
     venv=venv,
     exploration_frac=0.05,
-    rng=rng,
+    rng=rng
 )
 
 
@@ -401,13 +376,13 @@ if config["feedback"]["type"] == 'scalar':
 else:
     result = reward_learner.train(
         # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
-        total_timesteps=10000 * N_ITER * wandb.config["environment"]["horizon"],
+        total_timesteps=1 * N_ITER * wandb.config["environment"]["horizon"],
         total_comparisons=N_COMPARISONS,
         #callback=save_model_params_and_dataset_callback,
         callback=WandbCallback(
-        gradient_save_freq=100,
-        model_save_path=f"models/{run.id}",
-        verbose=2,
-    ),
+            gradient_save_freq=100,
+            model_save_path=f"./models/PPO_1",
+            verbose=2,
+        ),
     )
     
