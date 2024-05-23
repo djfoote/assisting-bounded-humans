@@ -118,9 +118,6 @@ def evaluate_policy(
 
     episode_counts = np.zeros(n_envs, dtype=int)
     episode_count_targets = np.array([(n_eval_episodes + i) // n_envs for i in range(n_envs)], dtype=int)
-
-    print("episode_count_targets: ", episode_count_targets)
-
     completed_trajectories = {i: [] for i in range(n_envs)}
 
     current_rewards = np.zeros(n_envs)

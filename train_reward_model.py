@@ -48,9 +48,9 @@ from customPolicyPPO import CustomCNNPolicy
 
 
 GPU_NUMBER = 0
-N_ITER = 60
-N_COMPARISONS = 10 #10_000
-TESTING = False
+N_ITER = 100
+N_COMPARISONS = 2000 #10_000
+TESTING = True
 
 
 #######################################################################################################################
@@ -60,14 +60,14 @@ TESTING = False
 config = {
     "environment": {
         "name": "StealingGridworld",
-        "grid_size": 5,
+        "grid_size": 3,
         "horizon": 30,
         "reward_for_depositing": 100,
         "reward_for_picking_up": 10,
         "reward_for_stealing": -200,
         "randomize": False,
         'num_free_pellets': 3,
-        'num_owned_pellets': 2,
+        'num_owned_pellets': 3,
     },
     "reward_model": {
         "type": "NonImageCnnRewardNet",
@@ -97,7 +97,7 @@ config = {
         #"visibility_mask_key": "full",
     },
     "reward_trainer": {
-        "num_epochs": 5,
+        "num_epochs": 10,
     },
 }
 
@@ -139,7 +139,7 @@ timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 run = wandb.init(
     project="assisting-bounded-humans",
     notes="Full Observability - PPO - 5x5",
-    name="FO-PPO-5x5_6x6",
+    name="FO-PPO-3x3_3x3",
     tags=[
         "Train Run",
         "Full Observability",
@@ -281,15 +281,16 @@ else:
 
 
 agent = PPO(
-    policy=CustomCNNPolicy,
+    policy='MlpPolicy',
     env=venv,
     seed=config['seed'],
-    n_steps=2048,
+    batch_size=128,
     n_epochs=10,
     verbose=1,
     tensorboard_log=f"./runs/PPO_1",
     ent_coef=0.01,
-    learning_rate=0.00025,
+    learning_rate=2e-3,
+    target_kl=0.015
 )
 
 from imitation_modules import preference_comparisons
@@ -298,7 +299,7 @@ trajectory_generator = preference_comparisons.AgentTrainer(
     algorithm=agent,
     reward_fn=reward_net,
     venv=venv,
-    exploration_frac=0.05,
+    #exploration_frac=0.1,
     rng=rng
 )
 
@@ -368,7 +369,7 @@ from wandb.integration.sb3 import WandbCallback
 if config["feedback"]["type"] == 'scalar':
     result = reward_learner.train(
         # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
-        total_timesteps=10 * N_ITER * wandb.config["environment"]["horizon"],
+        total_timesteps=500 * N_ITER * wandb.config["environment"]["horizon"],
         total_queries=N_COMPARISONS,
         callback=save_model_params_and_dataset_callback,
     )
@@ -376,7 +377,7 @@ if config["feedback"]["type"] == 'scalar':
 else:
     result = reward_learner.train(
         # Just needs to be bigger then N_ITER * HORIZON. Value iteration doesn't really use this.
-        total_timesteps=1 * N_ITER * wandb.config["environment"]["horizon"],
+        total_timesteps= 500 * N_ITER * wandb.config["environment"]["horizon"],
         total_comparisons=N_COMPARISONS,
         #callback=save_model_params_and_dataset_callback,
         callback=WandbCallback(

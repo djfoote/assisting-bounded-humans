@@ -1718,6 +1718,14 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                 f"Collecting {2 * num_pairs} fragments ({num_steps} transitions)",
             )
             trajectories = self.trajectory_generator.sample(num_steps)
+
+            print("Debugging: Trajectories")
+            #print(trajectories)
+
+            #print(trajectories[0])
+            print("Type of trajectories: ", type(trajectories)) 
+            print("len of trajectories: ", len(trajectories))
+            print("Type of trajectories[0]: ", type(trajectories[0]))
             # This assumes there are no fragments missing initial timesteps
             # (but allows for fragments missing terminal timesteps).
             horizons = (len(traj) for traj in trajectories if traj.terminal)
@@ -1794,8 +1802,8 @@ class PreferenceComparisons(base.BaseImitationAlgorithm):
                     for condition, prop in prop_bad_per_condition.items():
                         self.logger.record(f"policy_behavior/prop_bad_rollouts_{condition}", prop)
 
-                    self.logger.record("policy_behavior/episode_rewards", episode_rewards.mean())
-                    self.logger.record("policy_behavior/episode_lengths", episode_lengths.mean())
+                    self.logger.record("policy_behavior/episode_rewards", np.mean(episode_rewards))
+                    self.logger.record("policy_behavior/episode_lengths", np.mean(episode_lengths))
 
             self.logger.dump(self._iteration)
 
