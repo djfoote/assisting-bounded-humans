@@ -83,8 +83,8 @@ def get_optimal_policy_and_values(env, gamma=0.99, horizon=None, alt_reward_fn=N
         A TabularPolicy object, the optimal policy for the given environment (and reward function, if specified).
     """
     if horizon is None:
-        if hasattr(env, "max_steps"):
-            horizon = env.max_steps
+        if hasattr(env, "horizon"):
+            horizon = env.horizon
         else:
             raise ValueError("Must specify horizon if environment does not have max_steps.")
 
