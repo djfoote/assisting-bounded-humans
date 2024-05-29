@@ -64,7 +64,7 @@ config = {
     "seed": 1,
     "dataset_max_size": 100_000,
     # If fragment_length is None, then the whole trajectory is used as a single fragment.
-    "fragment_length": 5,
+    "fragment_length": 10,
     "transition_oversampling": 10,
     "initial_epoch_multiplier": 4.0,
     "feedback": {
