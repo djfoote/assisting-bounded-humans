@@ -1,0 +1,20 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+numpy = "*"
+tqdm = "*"
+gymnasium = "*"
+imitation = "*"
+scipy = "*"
+
+[dev-packages]
+jupyter = "*"
+pytest = "*"
+black = "*"
+isort = "*"
+
+[requires]
+python_version = "3.12"
