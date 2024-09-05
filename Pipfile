@@ -9,6 +9,7 @@ tqdm = "*"
 gymnasium = "*"
 imitation = "*"
 scipy = "*"
+wandb = "*"
 
 [dev-packages]
 jupyter = "*"
