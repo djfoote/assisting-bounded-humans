@@ -570,7 +570,7 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
 
             start_time = time.time()
             self.reward_trainer.train(self.dataset, epoch_multiplier=epoch_multiplier)
-            self.logger.record("reward_train_time", time.time() - start_time)
+            self.logger.record("reward_model_train_time_elapsed", time.time() - start_time)
 
             base_key = self.logger.get_accumulate_prefixes() + "reward/final/train"
             assert f"{base_key}/loss" in self.logger.name_to_value
