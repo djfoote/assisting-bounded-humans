@@ -1,5 +1,7 @@
 import abc
 import os
+from collections import Counter
+from functools import cached_property
 from typing import Union
 
 import numpy as np
@@ -14,6 +16,27 @@ class DeterministicMDP(abc.ABC):
     A deterministic MDP.
     """
 
+    def __init__(self, *args, **kwargs):
+        """
+        Initialize the DeterministicMDP with generic arguments and keyword arguments.
+
+        This allows for flexible initialization of subclasses with different parameters.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
+        self._args = args
+        self._kwargs = kwargs
+
+    @property
+    @abc.abstractmethod
+    def actions(self):
+        """
+        Return a list of all possible actions in the MDP.
+        """
+        raise NotImplementedError
+
     @abc.abstractmethod
     def successor(self, state, action):
         """
@@ -21,26 +44,38 @@ class DeterministicMDP(abc.ABC):
         """
         raise NotImplementedError
 
-    @abc.abstractmethod
     def reward(self, state, action):
         """
         Given a state and action, return the reward.
         """
-        raise NotImplementedError
+        _, reward = self.successor(state, action)
+        return reward
 
     @abc.abstractmethod
-    def enumerate_states(self):
+    def get_start_states(self):
         """
-        Enumerate all states in some consistent order.
+        Return a list of all possible starting states of the MDP.
         """
         raise NotImplementedError
 
-    @abc.abstractmethod
-    def enumerate_actions(self):
+    @cached_property
+    def states(self):
         """
-        Enumerate all actions in some consistent order.
+        Return a list of all states in the MDP.
         """
-        raise NotImplementedError
+        visited = []
+        visited_states_encoded = set()
+        queue = self.get_start_states()
+        while queue:
+            state = queue.pop()
+            visited.append(state)
+            for action in self.actions:
+                next_state = self.successor(state, action)[0]
+                encoded_next_state = self.encode_state(next_state)
+                if encoded_next_state not in visited_states_encoded:
+                    visited_states_encoded.add(encoded_next_state)
+                    queue.append(next_state)
+        return visited
 
     @abc.abstractmethod
     def encode_state(self, state):
@@ -68,18 +103,6 @@ class DeterministicMDP(abc.ABC):
             A string encoding the MDP parameters.
         """
         return self.__class__.__name__
-
-    @property
-    def states(self):
-        if not hasattr(self, "_states"):
-            self._states = self.enumerate_states()
-        return self._states
-
-    @property
-    def actions(self):
-        if not hasattr(self, "_actions"):
-            self._actions = self.enumerate_actions()
-        return self._actions
 
     def get_state_index(self, state):
         if not hasattr(self, "_state_index"):

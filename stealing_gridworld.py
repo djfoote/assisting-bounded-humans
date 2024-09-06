@@ -80,6 +80,17 @@ class StealingGridworld(gym.Env, DeterministicMDP):
 
         self.reset()
 
+    def get_start_states(self):
+        agent_position = self.home_location.copy()
+        states = []
+        for free_pellet_locs in self._enumerate_random_locations(n=self.num_free_pellets, excluding=agent_position):
+            exclude = np.vstack((agent_position, free_pellet_locs))
+            for owned_pellet_locs in self._enumerate_random_locations(n=self.num_owned_pellets, excluding=exclude):
+                states.append(
+                    self._get_observation_from_state_components(agent_position, free_pellet_locs, owned_pellet_locs, 0)
+                )
+        return states
+
     def reset(self, seed=None):
         super().reset(seed=seed)
 
@@ -138,54 +149,8 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         self._register_state(prev_state)
         return successor_state, reward
 
-    def reward(self, state, action):
-        """
-        Returns the reward for a given state and action.
-        """
-        self._register_state(state)
-        _, reward, _, _ = self.step(action)
-
-        return reward
-
-    def enumerate_states(self):
-        """
-        Returns a list of all possible states in the environment.
-        """
-        states = []
-
-        home_location_raveled = np.ravel_multi_index(self.home_location, (self.grid_size, self.grid_size))
-        for agent_position in tqdm.tqdm(
-            list(itertools.product(range(self.grid_size), repeat=2)), desc="Enumerating states"
-        ):
-            for num_carried_pellets in range(self.num_pellets + 1):
-                for num_loose_pellets in reversed(range(self.num_pellets - num_carried_pellets + 1)):
-                    for pellet_locations in itertools.combinations(range(self.grid_size**2 - 1), num_loose_pellets):
-                        pellet_locations = np.array(pellet_locations, dtype=np.int32)
-                        # Exclude the home location
-                        pellet_locations[pellet_locations >= home_location_raveled] += 1
-                        # Every partition of the pellet locations is a possible state
-                        min_loose_free_pellets = max(0, num_loose_pellets - self.num_owned_pellets)
-                        for num_loose_free_pellets in range(min_loose_free_pellets, self.num_free_pellets + 1):
-                            for indices in itertools.combinations(range(len(pellet_locations)), num_loose_free_pellets):
-                                free_pellet_locations_raveled = pellet_locations[list(indices)]
-                                owned_pellet_locations_raveled = np.delete(pellet_locations, list(indices))
-                                free_pellet_locations = np.array(
-                                    np.unravel_index(free_pellet_locations_raveled, (self.grid_size, self.grid_size))
-                                ).T
-                                owned_pellet_locations = np.array(
-                                    np.unravel_index(owned_pellet_locations_raveled, (self.grid_size, self.grid_size))
-                                ).T
-                                state = self._get_observation_from_state_components(
-                                    agent_position=np.array(agent_position),
-                                    num_carried_pellets=num_carried_pellets,
-                                    free_pellet_locations=free_pellet_locations,
-                                    owned_pellet_locations=owned_pellet_locations,
-                                )
-                                states.append(state)
-
-        return states
-
-    def enumerate_actions(self):
+    @property
+    def actions(self):
         """
         Returns a list of all possible actions in the environment.
         """
@@ -262,7 +227,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         categorical = np.full((1, self.grid_size, self.grid_size), num_carried_pellets, dtype=np.int16)
         return np.concatenate([image, categorical], axis=0)
 
-    def _get_random_locations(self, n=1, excluding=None):
+    def _get_random_locations(self, n=1, excluding=None, seed=None):
         """
         Returns n random locations in the grid, excluding the given locations.
 
@@ -271,6 +236,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             excluding (np.ndarray): Locations to exclude. If None, no locations are excluded. If a 1D array, it is
                 interpreted as a single location. If a 2D array, it is interpreted as a list of locations. Defaults to
                 None.
+            seed (int): Seed for the random number generator. If None, uses the global numpy random state. Defaults to None.
 
         Returns:
             np.ndarray: Array of shape (n, 2) containing the locations.
@@ -284,8 +250,36 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                 excluding = excluding[None, :]
             grid_locations = grid_locations[~np.all(grid_locations[:, None, :] == excluding, axis=2).any(axis=1)]
 
-        # Sample n random locations
-        return grid_locations[np.random.choice(np.arange(len(grid_locations)), size=n, replace=False)]
+        # Create a local random number generator with the given seed
+        rng = np.random.default_rng(seed)
+
+        # Sample n random locations using the local random number generator
+        return grid_locations[rng.choice(np.arange(len(grid_locations)), size=n, replace=False)]
+
+    def _enumerate_random_locations(self, n=1, excluding=None):
+        """
+        Enumerates all possible combinations of n random locations in the grid, excluding the given locations.
+
+        Args:
+            n (int): Number of locations to return in each combination. Defaults to 1.
+            excluding (np.ndarray): Locations to exclude. If None, no locations are excluded. If a 1D array, it is
+                interpreted as a single location. If a 2D array, it is interpreted as a list of locations. Defaults to
+                None.
+
+        Returns:
+            list: List of np.ndarrays, each of shape (n, 2) containing a possible combination of locations.
+        """
+        # Create array of all grid locations
+        grid_locations = np.array(list(itertools.product(range(self.grid_size), repeat=2)))
+
+        # Remove excluded locations
+        if excluding is not None:
+            if excluding.ndim == 1:
+                excluding = excluding[None, :]
+            grid_locations = grid_locations[~np.all(grid_locations[:, None, :] == excluding, axis=2).any(axis=1)]
+
+        # Generate all possible combinations of n locations
+        return [np.array(combo) for combo in itertools.combinations(grid_locations, n)]
 
     @staticmethod
     def _action_to_direction(action):
@@ -375,7 +369,7 @@ class StealingGridworld(gym.Env, DeterministicMDP):
             if policy is not None:
                 print("Policy action: {}".format(self._action_to_string(policy.predict(self._get_observation()))))
             if optimal_qs is not None:
-                for action in range(self.action_space.n):
+                for action in self.action_space():
                     print(
                         "Q({}) = {}".format(
                             self._action_to_string(action),
