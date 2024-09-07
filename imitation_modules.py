@@ -10,7 +10,7 @@ import torch as th
 from gymnasium import spaces
 from imitation.algorithms import base, preference_comparisons
 from imitation.data import rollout
-from imitation.data.types import TrajectoryWithRew
+from imitation.data.types import TrajectoryWithRew, TrajectoryWithRewPair
 from imitation.rewards.reward_nets import RewardNet
 from imitation.util import logger as imit_logger
 from imitation.util import networks, util
@@ -303,15 +303,15 @@ class SyntheticScalarFeedbackGatherer(ScalarFeedbackGatherer):
 
 
 class NoisyObservationGathererWrapper(ScalarFeedbackGatherer):
-    """Wraps a scalar feedback gatherer to handle the feedback giver seeing a noisy observation of state, rather than
-    the true environment state.
+    """Wraps a feedback gatherer to handle the feedback giver seeing a noisy observation of state, rather than the true
+    environment state.
 
     Current implementation only supports deterministic observation noise (such as occlusion). Later implementations
     will pass a random seed to the observation function to support stochastic observation noise. For now, a stochastic
     observation function will not fail, but will not be seed-able, so results will not be reproducible.
     """
 
-    def __init__(self, gatherer: ScalarFeedbackGatherer, observe_fn):
+    def __init__(self, gatherer, observe_fn):
         self.wrapped_gatherer = gatherer
         self.observe_fn = observe_fn
 
@@ -319,7 +319,12 @@ class NoisyObservationGathererWrapper(ScalarFeedbackGatherer):
         return getattr(self.wrapped_gatherer, name)
 
     def __call__(self, fragments):
-        noisy_fragments = [self.observe_fn(fragment) for fragment in fragments]
+        if isinstance(fragments, TrajectoryWithRewPair):
+            noisy_fragments = [(self.observe_fn(fragment[0]), self.observe_fn(fragment[1])) for fragment in fragments]
+        elif isinstance(fragments, list):
+            noisy_fragments = [self.observe_fn(fragment) for fragment in fragments]
+        else:
+            raise ValueError(f"Unsupported fragment type: {type(fragments)}")
         return self.wrapped_gatherer(noisy_fragments)
 
 
@@ -460,7 +465,7 @@ class BasicScalarFeedbackRewardTrainer(ScalarFeedbackRewardTrainer):
         return loss
 
 
-class ScalarRewardLearner(base.BaseImitationAlgorithm):
+class RewardLearner(base.BaseImitationAlgorithm):
     """Main interface for reward learning using scalar reward feedback.
 
     Largely mimicking PreferenceComparisons class from imitation.algorithms.preference_comparisons. If this code ever
@@ -496,6 +501,10 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
 
         self.trajectory_generator = trajectory_generator
         self.trajectory_generator.logger = self.logger
+        # TODO: Try to redesign control flow so feedback_type can be a single experiment parameter.
+        # TODO: Barring that, infer more robustly which is being used, i.e. also check the other components' types.
+        # Research code, baby!
+        self.feedback_type = "scalar" if isinstance(feedback_gatherer, ScalarFeedbackGatherer) else "preference"
 
         self.fragmenter = fragmenter
         self.fragmenter.logger = self.logger
@@ -516,7 +525,10 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
             raise NotImplementedError(f"Callable query schedules not implemented.")
         self.query_schedule = preference_comparisons.QUERY_SCHEDULES[query_schedule]
 
-        self.dataset = ScalarFeedbackDataset(max_size=feedback_queue_size)
+        if self.feedback_type == "scalar":
+            self.dataset = ScalarFeedbackDataset(max_size=feedback_queue_size)
+        else:
+            self.dataset = preference_comparisons.PreferenceDataset(max_size=feedback_queue_size)
 
         self.policy_evaluator = policy_evaluator
         self.callback = callback
@@ -546,7 +558,11 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
             # Gather new feedback #
             #######################
             num_steps = np.ceil(self.transition_oversampling * num_queries * self.fragment_length).astype(int)
-            self.logger.log(f"Collecting {num_queries} feedback queries ({num_steps} transitions)")
+            if self.feedback_type == "scalar":
+                num_steps *= 2
+            self.logger.log(
+                f"Collecting {num_queries} {"fragments" if self.feedback_type == "scalar" else "fragment pairs"} "
+                f"({num_steps} transitions)")
             trajectories = self.trajectory_generator.sample(num_steps)
             #  This assumes there are no fragments missing initial timesteps
             # (but allows for fragments missing terminal timesteps).
@@ -558,8 +574,8 @@ class ScalarRewardLearner(base.BaseImitationAlgorithm):
             self.logger.log("Gathering feedback")
             feedback = self.feedback_gatherer(fragments)
             self.dataset.push(fragments, feedback)
-            self.logger.log(f"Dataset now contains {len(self.dataset.reward_labels)} feedback queries")
-            self.logger.record(f"dataset_size", len(self.dataset.reward_labels))
+            self.logger.log(f"Dataset now contains {len(self.dataset)} feedback queries")
+            self.logger.record(f"dataset_size", len(self.dataset))
 
             ######################
             # Train reward model #

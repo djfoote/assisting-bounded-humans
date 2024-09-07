@@ -18,8 +18,8 @@ from imitation_modules import (
     NoisyObservationGathererWrapper,
     NonImageCnnRewardNet,
     RandomSingleFragmenter,
+    RewardLearner,
     ScalarFeedbackModel,
-    ScalarRewardLearner,
     SyntheticScalarFeedbackGatherer,
 )
 from stealing_gridworld import PartialGridVisibility, StealingGridworld
@@ -204,7 +204,7 @@ def save_model_params_and_dataset_callback(reward_learner):
     reward_learner.dataset.save(dataset_iter_path)
 
 
-reward_learner = ScalarRewardLearner(
+reward_learner = RewardLearner(
     trajectory_generator=trajectory_generator,
     reward_model=reward_net,
     num_iterations=N_ITER,
