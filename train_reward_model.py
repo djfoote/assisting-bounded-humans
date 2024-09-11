@@ -1,26 +1,28 @@
 # Copy of code from experiment ipython notebook
 
 import os
-import pickle
-import time
 
 import numpy as np
 import torch as th
-from imitation.algorithms import preference_comparisons
+from imitation.algorithms.preference_comparisons import (
+    BasicRewardTrainer,
+    CrossEntropyRewardLoss,
+    PreferenceModel,
+    RandomFragmenter,
+)
 from imitation.util import logger as imit_logger
 
 import wandb
 from evaluate_reward_model import full_visibility_evaluator_factory, partial_visibility_evaluator_factory
-from imitation_modules import (
+from human_feedback_model import SyntheticPreferenceHumanFeedbackModel
+from imitation_modules import DeterministicMDPTrajGenerator, NonImageCnnRewardNet, RewardLearner
+from partial_observability import PartialObservabilityHumanFeedbackModelWrapper
+from scalar_feedback import (
     BasicScalarFeedbackRewardTrainer,
-    DeterministicMDPTrajGenerator,
+    GroundTruthScalarHumanFeedbackModel,
     MSERewardLoss,
-    NoisyObservationGathererWrapper,
-    NonImageCnnRewardNet,
     RandomSingleFragmenter,
-    RewardLearner,
     ScalarFeedbackModel,
-    SyntheticScalarFeedbackGatherer,
 )
 from stealing_gridworld import PartialGridVisibility, StealingGridworld
 
@@ -30,8 +32,8 @@ from stealing_gridworld import PartialGridVisibility, StealingGridworld
 
 
 GPU_NUMBER = None
-N_ITER = 20
-N_COMPARISONS = 10_000
+N_ITER = 5
+N_COMPARISONS = 1_000
 
 
 #######################################################################################################################
@@ -60,7 +62,7 @@ config = {
     "transition_oversampling": 10,
     "initial_epoch_multiplier": 1,
     "feedback": {
-        "type": "scalar",
+        "type": "preference",
     },
     "trajectory_generator": {
         "epsilon": 0.1,
@@ -80,8 +82,8 @@ config = {
 
 # Some validation
 
-if config["feedback"]["type"] != "scalar":
-    raise NotImplementedError("Only scalar feedback is supported at the moment.")
+if config["feedback"]["type"] not in ["scalar", "preference"]:
+    raise NotImplementedError("Only scalar and preference feedback are supported at the moment.")
 
 if config["visibility"]["visibility"] == "full" and config["visibility"]["visibility_mask_key"] != "full":
     raise ValueError(
@@ -158,7 +160,15 @@ if GPU_NUMBER is not None:
     print(f"Reward net on {device}.")
 
 fragmenter = RandomSingleFragmenter(rng=rng)
-gatherer = SyntheticScalarFeedbackGatherer(rng=rng)
+human_feedback_model = GroundTruthScalarHumanFeedbackModel(rng=rng)
+
+
+if wandb.config["feedback"]["type"] == "scalar":
+    fragmenter = RandomSingleFragmenter(rng=rng)
+    human_feedback_model = GroundTruthScalarHumanFeedbackModel(rng=rng)
+else:
+    fragmenter = RandomFragmenter(rng=rng)
+    human_feedback_model = SyntheticPreferenceHumanFeedbackModel(rng=rng)
 
 
 if wandb.config["visibility"]["visibility"] == "partial":
@@ -167,19 +177,30 @@ if wandb.config["visibility"]["visibility"] == "partial":
         wandb.config["visibility"]["visibility_mask_key"],
     )
     observation_function = PartialGridVisibility(env, visibility_mask=visibility_mask)
-    gatherer = NoisyObservationGathererWrapper(gatherer, observation_function)
+    human_feedback_model = PartialObservabilityHumanFeedbackModelWrapper(human_feedback_model, observation_function)
     policy_evaluator = partial_visibility_evaluator_factory(visibility_mask)
 elif wandb.config["visibility"]["visibility"] == "full":
     policy_evaluator = full_visibility_evaluator_factory()
 
 
-feedback_model = ScalarFeedbackModel(model=reward_net)
-reward_trainer = BasicScalarFeedbackRewardTrainer(
-    feedback_model=feedback_model,
-    loss=MSERewardLoss(),  # Will need to change this for preference learning
-    rng=rng,
-    epochs=wandb.config["reward_trainer"]["num_epochs"],
-)
+if wandb.config["feedback"]["type"] == "scalar":
+    feedback_model = ScalarFeedbackModel(model=reward_net)
+    reward_trainer = BasicScalarFeedbackRewardTrainer(
+        feedback_model=feedback_model,
+        loss=MSERewardLoss(),  # Will need to change this for preference learning
+        rng=rng,
+        epochs=config["reward_trainer"]["num_epochs"],
+    )
+else:
+    feedback_model = PreferenceModel(model=reward_net)
+    reward_trainer = BasicRewardTrainer(
+        preference_model=feedback_model,
+        loss=CrossEntropyRewardLoss(),
+        rng=rng,
+        epochs=config["reward_trainer"]["num_epochs"],
+    )
+
+
 trajectory_generator = DeterministicMDPTrajGenerator(
     reward_fn=reward_net,
     env=env,
@@ -209,7 +230,7 @@ reward_learner = RewardLearner(
     reward_model=reward_net,
     num_iterations=N_ITER,
     fragmenter=fragmenter,
-    feedback_gatherer=gatherer,
+    human_feedback_model=human_feedback_model,
     feedback_queue_size=wandb.config["dataset_max_size"],
     reward_trainer=reward_trainer,
     fragment_length=wandb.config["fragment_length"],

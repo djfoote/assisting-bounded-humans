@@ -9,7 +9,7 @@ from gymnasium import spaces
 from imitation.data.types import TrajectoryWithRew
 
 from deterministic_mdp import DeterministicMDP
-from imitation_modules import ObservationFunction
+from partial_observability import ObservationFunction
 
 
 class StealingGridworld(gym.Env, DeterministicMDP):
