@@ -16,7 +16,7 @@ import wandb
 from evaluate_reward_model import full_visibility_evaluator_factory, partial_visibility_evaluator_factory
 from human_feedback_model import SyntheticPreferenceHumanFeedbackModel
 from imitation_modules import DeterministicMDPTrajGenerator, NonImageCnnRewardNet, RewardLearner
-from partial_observability import PartialObservabilityHumanFeedbackModelWrapper
+from partial_observability import StatesSameAsObsHumanModelWrapper
 from scalar_feedback import (
     BasicScalarFeedbackRewardTrainer,
     GroundTruthScalarHumanFeedbackModel,
@@ -177,7 +177,7 @@ if wandb.config["visibility"]["visibility"] == "partial":
         wandb.config["visibility"]["visibility_mask_key"],
     )
     observation_function = PartialGridVisibility(env, visibility_mask=visibility_mask)
-    human_feedback_model = PartialObservabilityHumanFeedbackModelWrapper(human_feedback_model, observation_function)
+    human_feedback_model = StatesSameAsObsHumanModelWrapper(human_feedback_model, observation_function)
     policy_evaluator = partial_visibility_evaluator_factory(visibility_mask)
 elif wandb.config["visibility"]["visibility"] == "full":
     policy_evaluator = full_visibility_evaluator_factory()
@@ -187,7 +187,7 @@ if wandb.config["feedback"]["type"] == "scalar":
     feedback_model = ScalarFeedbackModel(model=reward_net)
     reward_trainer = BasicScalarFeedbackRewardTrainer(
         feedback_model=feedback_model,
-        loss=MSERewardLoss(),  # Will need to change this for preference learning
+        loss=MSERewardLoss(),
         rng=rng,
         epochs=config["reward_trainer"]["num_epochs"],
     )

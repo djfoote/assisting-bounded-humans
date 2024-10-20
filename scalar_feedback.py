@@ -61,9 +61,10 @@ class RandomSingleFragmenter(preference_comparisons.RandomFragmenter):
     """
 
     def __call__(self, trajectories, fragment_length, num_fragments):
-        fragment_pairs = super().__call__(trajectories, fragment_length, int(np.ceil(num_fragments // 2)))
-        # fragment_pairs is a list of (fragment, fragment) tuples. We want to flatten this into a list of fragments.
-        return list(itertools.chain.from_iterable(fragment_pairs))
+        # fragment_pairs = super().__call__(trajectories, fragment_length, int(np.ceil(num_fragments // 2)))
+        # # fragment_pairs is a list of (fragment, fragment) tuples. We want to flatten this into a list of fragments.
+        # return list(itertools.chain.from_iterable(fragment_pairs))
+        return np.random.choice(trajectories, num_fragments, replace=False)
 
 
 class ScalarFeedbackModel(nn.Module):

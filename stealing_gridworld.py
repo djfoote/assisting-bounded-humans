@@ -9,7 +9,7 @@ from gymnasium import spaces
 from imitation.data.types import TrajectoryWithRew
 
 from deterministic_mdp import DeterministicMDP
-from partial_observability import ObservationFunction
+from partial_observability import BeliefDistribution, BeliefFunction, ObservationFunction, TrajectoryWithRewAndObs
 
 
 class StealingGridworld(gym.Env, DeterministicMDP):
@@ -361,8 +361,12 @@ class StealingGridworld(gym.Env, DeterministicMDP):
         print("  (no input): Ask policy for action, if policy vector is given")
         print("")
 
-        self.reset()
+        state = self.reset()
         total_reward = 0
+
+        states = [state]
+        actions = []
+        rewards = []
 
         self.render()
         while True:
@@ -394,6 +398,9 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                         action = policy.predict(self._get_observation())
 
             obs, reward, done, _ = self.step(action)
+            states.append(obs)
+            actions.append(action)
+            rewards.append(reward)
             total_reward += reward
             print("Reward: {}".format(reward))
             print()
@@ -404,6 +411,14 @@ class StealingGridworld(gym.Env, DeterministicMDP):
                 break
 
         print("Total reward: {}".format(total_reward))
+
+        return TrajectoryWithRew(
+            obs=np.array(states, dtype=np.int16),
+            acts=np.array(actions, dtype=np.int16),
+            rews=np.array(rewards, dtype=float),
+            terminal=done,
+            infos=None,
+        )
 
 
 def separate_image_and_categorical_state(
@@ -455,3 +470,26 @@ class PartialGridVisibility(ObservationFunction):
         new_rew = fragment.rews * agent_visible
 
         return TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, new_rew)
+
+
+class GiveUpIfAgentNotVisibleFunction(BeliefFunction):
+    """A belief function that just returns the start state if the agent is not visible.
+
+    Original Stealy Dan experiments used a different paradigm in which the reward was simply set to 0 if the agent
+    was not visible. This replicates that within the PORLHF framework.
+    """
+
+    def __init__(self, env: StealingGridworld, visibility_mask=None):
+        self.env = env
+        self.visibility_mask = visibility_mask
+        self._default_state = self.env.get_start_states()[0]
+
+    def __call__(self, obs_seq: TrajectoryWithRewAndObs) -> BeliefDistribution:
+        state_seq_inferred = obs_seq.obs.copy()
+        agent_visible = obs_seq.obs[:, 0].any(axis=(1, 2))
+        # On timesteps where the agent is not visible, replace the inferred state with the default state, and the reward
+        # with 0.
+        state_seq_inferred[~agent_visible] = self._default_state
+        reward_seq_inferred = obs_seq.rews * agent_visible
+        inferred_traj = TrajectoryWithRewAndObs(state_seq_inferred, obs_seq.acts, obs_seq.rews, obs_seq.infos)
+        return BeliefDistribution([(inferred_traj, 1.0)])
