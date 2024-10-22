@@ -16,6 +16,7 @@ jupyter = "*"
 pytest = "*"
 black = "*"
 isort = "*"
+ipykernel = "*"
 
 [requires]
 python_version = "3.12"
