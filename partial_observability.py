@@ -3,9 +3,38 @@ import dataclasses
 from typing import Sequence, Tuple, Union
 
 import numpy as np
-from imitation.data.types import Pair, TrajectoryWithRew, TrajectoryWithRewPair
+import torch as th
+from imitation.algorithms.preference_comparisons import PreferenceModel
+from imitation.data.types import Pair, Trajectory, TrajectoryWithRew, TrajectoryWithRewPair
 
 from human_feedback_model import FeedbackType, HumanFeedbackModel, SyntheticPreferenceHumanFeedbackModel
+
+
+@dataclasses.dataclass(frozen=True)
+class TrajectoryWithObs(Trajectory):
+    """A trajectory fragment with observations."""
+
+    state: np.ndarray
+    """State, shape (trajectory_len + 1, ) + state_shape.
+    
+    The state is defined in this class rather than observation because the imitation library uses "obs" to refer to
+    what we call state. When using this class, `obs` refers to observations, rather than to states, as it does in the
+    Trajectory base class in the imitation library.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        assert (
+            self.state.shape[0] == self.obs.shape[0]
+        ), f"Mismatching state and observation lengths: {self.state.shape[0]} != {self.obs.shape[0]}"
+
+    def drop_obs(self) -> Trajectory:
+        return Trajectory(
+            obs=self.state,
+            acts=self.acts,
+            infos=self.infos,
+            terminal=self.terminal,
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -79,6 +108,16 @@ class BeliefDistribution:
         for traj, p in self.probs:
             string += f"{traj.state}: {p}, "
         return "{" + string[:-2] + "}"
+
+    def pprint(self, env=None):
+        if env is None:
+            print(self)
+            return
+        string = ""
+        for traj, p in self.probs:
+            state_str = " ".join(env.states[state] for state in traj.state)
+            string += f"{state_str}: {p}, "
+        print("{" + string[:-2] + "}")
 
 
 class BeliefFunction(abc.ABC):
@@ -178,3 +217,43 @@ class StatesSameAsObsHumanModelWrapper(HumanFeedbackModel):
         else:
             raise ValueError(f"Unsupported feedback type: {self.feedback_type}")
         return self.wrapped_gatherer(noisy_fragments)
+
+
+class PORLHFPreferenceModel(PreferenceModel):
+    """
+    A preference model which accounts for partial observability and human beliefs. This model is based on the PORLHF
+    model described in "When Your AIs Deceive You".
+
+    Currently works under the assumption that all fragments are full trajectories of the same length.
+    """
+
+    def __init__(
+        self,
+        model,
+        observation_function: ObservationFunction,
+        belief_function: BeliefFunction,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(model, *args, **kwargs)
+        self.observation_function = observation_function
+        self.belief_function = belief_function
+
+    def rewards(self, transitions):
+        """
+        Computes the expected rewards under the human's belief given the observations emitted by `transitions`.
+        """
+        # Append the last observation from transitions.next_obs
+        full_obs_seq = np.concatenate([transitions.obs, transitions.next_obs[-1][None]], axis=0)
+        trajectory = Trajectory(obs=full_obs_seq, acts=transitions.acts, infos=None, terminal=True)
+        observation_seq = self.observation_function(trajectory)
+        belief = self.belief_function(observation_seq)
+
+        # TODO: This is slightly sketchy. It's returning an expected reward per time step, but really we have a
+        #       distribution over full trajectories. The only downstream operation is linear (summing, potentially with
+        #       discounting), so it's fine for now. But if we want to do something more complicated, we'll need to
+        #       rethink this.
+        expected_return = 0
+        for traj, prob in belief.probs:
+            expected_return += prob * self.model(th.tensor(traj.state))
+        return expected_return

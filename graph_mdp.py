@@ -4,7 +4,13 @@ import torch as th
 from imitation.data.types import TrajectoryWithRew
 from scipy import sparse
 
-from partial_observability import BeliefDistribution, BeliefFunction, ObservationFunction, TrajectoryWithRewAndObs
+from partial_observability import (
+    BeliefDistribution,
+    BeliefFunction,
+    ObservationFunction,
+    TrajectoryWithObs,
+    TrajectoryWithRewAndObs,
+)
 
 
 class GraphMDP(gym.Env):
@@ -166,11 +172,10 @@ class GraphObservationFunction(ObservationFunction):
     def __call__(self, trajectory):
         state_sequence = trajectory.obs
         observations = np.array([self.observation_fn_dict[self.graph_mdp.states[s_idx]] for s_idx in state_sequence])
-        return TrajectoryWithRewAndObs(
+        return TrajectoryWithObs(
             state=state_sequence,
             obs=observations,
             acts=trajectory.acts,
-            rews=trajectory.rews,
             infos=trajectory.infos,
             terminal=trajectory.terminal,
         )
@@ -224,13 +229,13 @@ class MatrixBeliefFunction(BeliefFunction):
                 state_seq = state_seq_key.split()
                 # TODO: Not sure yet if we need to use state (string) or state index (int) here.
                 #       Would need to do the same in the unambiguous case.
-                # state_seq_idx = [self.graph_mdp.state_index[state] for state in state_seq]
+                state_seq_idx = [self.graph_mdp.state_index[state] for state in state_seq]
 
                 # Construct a TrajectoryWithRewAndObs object with the state sequence.
                 # Must compute rews based on the inferred state sequence, rather than the ground truth.
-                rews = np.array([self.graph_mdp.rewards[state] for state in state_seq[:-1]])
+                rews = np.array([self.graph_mdp.rewards[self.graph_mdp.states[s_idx]] for s_idx in state_seq_idx[:-1]])
                 traj = TrajectoryWithRewAndObs(
-                    state=np.array(state_seq),
+                    state=np.array(state_seq_idx),
                     obs=obs_seq.obs,
                     acts=obs_seq.acts,
                     rews=rews,
@@ -239,10 +244,10 @@ class MatrixBeliefFunction(BeliefFunction):
                 )
                 probs.append((traj, prob))
         elif obs_seq_key in self.unambiguous_obs_seq:
-            state_seq = self.unambiguous_obs_seq[obs_seq_key]
-            rews = np.array([self.graph_mdp.rewards[self.graph_mdp.states[state_idx]] for state_idx in state_seq[:-1]])
+            state_seq_idx = self.unambiguous_obs_seq[obs_seq_key]
+            rews = np.array([self.graph_mdp.rewards[self.graph_mdp.states[s_idx]] for s_idx in state_seq_idx[:-1]])
             traj = TrajectoryWithRewAndObs(
-                state=np.array(state_seq),
+                state=np.array(state_seq_idx),
                 obs=obs_seq.obs,
                 acts=obs_seq.acts,
                 rews=rews,
