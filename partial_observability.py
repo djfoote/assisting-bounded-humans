@@ -28,7 +28,7 @@ class TrajectoryWithRewAndObs(TrajectoryWithRew):
 
     def drop_obs(self) -> TrajectoryWithRew:
         return TrajectoryWithRew(
-            obs=self.obs,
+            obs=self.state,
             acts=self.acts,
             rews=self.rews,
             infos=self.infos,
@@ -72,7 +72,13 @@ class BeliefDistribution:
     @property
     def expected_total_reward(self) -> float:
         """Computes the expected total reward of the distribution."""
-        return sum(prob * state.rew for state, prob in self.probs)
+        return np.sum(prob * np.sum(traj.rews) for traj, prob in self.probs)
+
+    def __str__(self):
+        string = ""
+        for traj, p in self.probs:
+            string += f"{traj.state}: {p}, "
+        return "{" + string[:-2] + "}"
 
 
 class BeliefFunction(abc.ABC):
@@ -135,11 +141,11 @@ class PORLHFHumanFeedbackModel(SyntheticPreferenceHumanFeedbackModel):
             score2 /= self.temperature
 
             # clip the returns to avoid overflow in the softmax below
-            scores_diff = np.clip(score1 - score2, -self.threshold, self.threshold)
+            scores_diff = np.clip(score2 - score1, -self.threshold, self.threshold)
             model_probs = 1 / (1 + np.exp(scores_diff))
             if self.sample:
                 assert self.rng is not None, "If `sample` is True, then `rng` must be provided."
-                preference = self.rng.binomial(1, model_probs)
+                preference = np.float32(self.rng.binomial(1, model_probs))
             else:
                 preference = model_probs
             preferences.append(preference)
