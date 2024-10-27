@@ -4,7 +4,10 @@ from graph_mdp import GraphMDP, GraphObservationFunction, MatrixBeliefFunction
 from partial_observability import PORLHFHumanFeedbackModel, TrajectoryWithRewAndObs
 
 
-def get_hiding_env_obs_and_belief(p=0.5, r=1.0, pW=0.5, pH=0.5, pH_prime=0.5):
+def get_hiding_env_obs_and_belief(p=0.5, r=1.0, pW=0.5, pH=0.5, pH_prime=None):
+    if pH_prime is None:
+        pH_prime = pH
+
     horizon = 3  # zero-indexed
     start_states = ["S"]
     graph = {
@@ -68,7 +71,7 @@ def get_hiding_env_obs_and_belief(p=0.5, r=1.0, pW=0.5, pH=0.5, pH_prime=0.5):
     return hiding_env, observation_fn, belief_fn
 
 
-def get_verbose_env_obs_and_belief(p=0.5, r=1.0, pC=0.8):
+def get_verbose_env_obs_and_belief(p=0.5, r=1.0, pD=0.8):
     horizon = 3
     start_states = ["S"]
     graph = {
@@ -113,8 +116,8 @@ def get_verbose_env_obs_and_belief(p=0.5, r=1.0, pC=0.8):
 
     human_belief_function_dict = {
         "o0 oI o0 o0": {
-            "S I W T": pC,
-            "S I T T": 1 - pC,
+            "S I W T": pD,
+            "S I T T": 1 - pD,
         },
     }
     belief_fn = MatrixBeliefFunction(verbose_env, human_belief_function_dict, observation_fn)
