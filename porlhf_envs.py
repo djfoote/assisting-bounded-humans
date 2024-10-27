@@ -4,7 +4,7 @@ from graph_mdp import GraphMDP, GraphObservationFunction, MatrixBeliefFunction
 from partial_observability import PORLHFHumanFeedbackModel, TrajectoryWithRewAndObs
 
 
-def get_hiding_env_obs_and_belief(p=0.5, r=1.0, pW=0.5, pH=0.5, pH_prime=0.5, alt_reward_fn_dict=None):
+def get_hiding_env_obs_and_belief(p=0.5, r=1.0, pW=0.5, pH=0.5, pH_prime=0.5):
     horizon = 3  # zero-indexed
     start_states = ["S"]
     graph = {
@@ -34,8 +34,6 @@ def get_hiding_env_obs_and_belief(p=0.5, r=1.0, pW=0.5, pH=0.5, pH_prime=0.5, al
         "LH": -5.0 - r,
         "T": 0.0,
     }
-    if alt_reward_fn_dict is not None:
-        raise NotImplementedError
     hiding_env = GraphMDP(start_states, graph, rewards, horizon)
 
     observation_fn_dict = {
@@ -66,10 +64,11 @@ def get_hiding_env_obs_and_belief(p=0.5, r=1.0, pW=0.5, pH=0.5, pH_prime=0.5, al
         },
     }
     belief_fn = MatrixBeliefFunction(hiding_env, human_belief_function_dict, observation_fn)
+
     return hiding_env, observation_fn, belief_fn
 
 
-def get_verbose_env_obs_and_belief(p=0.5, r=1.0, pC=0.8, alt_reward_fn_dict=None):
+def get_verbose_env_obs_and_belief(p=0.5, r=1.0, pC=0.8):
     horizon = 3
     start_states = ["S"]
     graph = {
@@ -99,8 +98,6 @@ def get_verbose_env_obs_and_belief(p=0.5, r=1.0, pC=0.8, alt_reward_fn_dict=None
         "LV": -1.0,
         "T": 0.0,
     }
-    if alt_reward_fn_dict is not None:
-        raise NotImplementedError
     verbose_env = GraphMDP(start_states, graph, hiding_env_rewards, horizon)
 
     observation_function_dict = {
@@ -114,8 +111,6 @@ def get_verbose_env_obs_and_belief(p=0.5, r=1.0, pC=0.8, alt_reward_fn_dict=None
     }
     observation_fn = GraphObservationFunction(verbose_env, observation_function_dict)
 
-    # TODO: The space delimiting is kind of brittle. It would be better to use a more robust format.
-    #       Doesn't matter for these experiments.
     human_belief_function_dict = {
         "o0 oI o0 o0": {
             "S I W T": pC,
@@ -123,6 +118,7 @@ def get_verbose_env_obs_and_belief(p=0.5, r=1.0, pC=0.8, alt_reward_fn_dict=None
         },
     }
     belief_fn = MatrixBeliefFunction(verbose_env, human_belief_function_dict, observation_fn)
+
     return verbose_env, observation_fn, belief_fn
 
 
