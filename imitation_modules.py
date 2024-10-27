@@ -1,8 +1,10 @@
+import itertools
 import time
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import torch as th
+import torch.nn as nn
 from gymnasium import spaces
 from imitation.algorithms import base, preference_comparisons
 from imitation.rewards.reward_nets import RewardNet
@@ -53,15 +55,114 @@ class DeterministicMDPTrajGenerator(preference_comparisons.TrajectoryGenerator):
             total_steps += len(trajectory)
         return trajectories
 
-    def train(self, steps):
+    def train(self, steps=None):
         """
         Find the optimal policy using value iteration under the given reward function.
         Overrides the train method as required for imitation.preference_comparisons.
         """
-        vi_steps = min(steps, self.max_vi_steps)
+        vi_steps = min(steps, self.max_vi_steps) if steps is not None else self.max_vi_steps
         self.policy = value_iteration.get_optimal_policy(
             self.env, gamma=self.vi_gamma, horizon=vi_steps, alt_reward_fn=self.reward_fn
         )
+
+
+class ExhaustiveTrajGenerator(DeterministicMDPTrajGenerator):
+    """
+    For sufficiently small MDPs, enumerates all possible trajectories.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.all_trajectories = self.env.enumerate_trajectories()
+
+    def sample(self, steps):
+        """
+        Generate all possible trajectories.
+        """
+        # TODO: Is it a problem to ignore `steps` like this? Might need to shuffle and truncate.
+        return self.all_trajectories
+
+
+class ExhaustiveFragmenter(preference_comparisons.RandomFragmenter):
+    """
+    For small MDPs, enumerates all possible pairs of framgents.
+    """
+
+    def __init__(self, rng, warning_threshold=0, custom_logger=None):
+        super().__init__(rng, warning_threshold=warning_threshold, custom_logger=custom_logger)
+
+    def __call__(self, trajectories, fragment_length, num_fragments):
+        """
+        Generate all possible fragments.
+        """
+        all_pairs = list(itertools.combinations(trajectories, 2))
+        num_repeats, left_over = divmod(num_fragments, len(all_pairs))
+        shuffled = self.rng.permutation(all_pairs)  # is a numpy array
+        return list(shuffled) * num_repeats + list(shuffled[:left_over])
+
+
+class TabularStatewiseRewardNet(RewardNet):
+    """
+    A reward network that computes rewards using a tabular representation of the reward function. Not actually a neural
+    network, but inherits from RewardNet for consistency.
+
+    The reward function is defined only on states, not (state, action) pairs or transitions.
+    """
+
+    def __init__(
+        self,
+        num_states: int,
+    ):
+        observation_space = spaces.Discrete(num_states)
+        # Dummy action space to satisfy RewardNet constructor
+        dummy_action_space = spaces.Discrete(1)
+        super().__init__(observation_space, dummy_action_space)
+
+        self.reward_values = nn.Parameter(th.zeros(num_states))
+
+    def preprocess(
+        self,
+        state: np.ndarray,
+        action: np.ndarray,
+        next_state: np.ndarray,
+        done: np.ndarray,
+    ) -> Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
+        """
+        Override standard input preprocess to bypass image preprocessing. Only lifts inputs to tensors.
+        """
+        state_th = util.safe_to_tensor(state).to(self.device).float()
+        action_th = util.safe_to_tensor(action).to(self.device)
+        next_state_th = util.safe_to_tensor(next_state).to(self.device)
+        done_th = util.safe_to_tensor(done).to(self.device)
+
+        return state_th, action_th, next_state_th, done_th
+
+    def forward(
+        self,
+        state_index: th.Tensor,
+        action: Optional[th.Tensor] = None,
+        next_state: Optional[th.Tensor] = None,
+        done: Optional[th.Tensor] = None,
+    ) -> th.Tensor:
+        """Computes rewardNet value on input state and action. Ignores action, next_state, and done flag. Processes a
+        batch of states.
+
+        Args:
+            state_index: current state index.
+            action: current action.
+            next_state: next state.
+            done: flag for whether the episode is over.
+
+        Returns:
+            th.Tensor: reward of the transition.
+        """
+        return th.index_select(self.reward_values, 0, state_index.long())
+
+    def rewards_per_state(self, env=None):
+        if env is None:
+            return self.reward_values.item()
+        return {state: self.reward_values[env.get_state_index(state)].item() for state in env.states}
 
 
 class NonImageCnnRewardNet(RewardNet):
@@ -213,18 +314,22 @@ class RewardLearner(base.BaseImitationAlgorithm):
         self.callback = callback
 
     def train(self, total_timesteps, total_queries):
-        initial_queries = int(self.initial_feedback_frac * total_queries)
-        total_queries -= initial_queries
 
-        # Compute the number of feedback queries to request at each iteration in advance.
-        vec_schedule = np.vectorize(self.query_schedule)
-        unnormalized_probs = vec_schedule(np.linspace(0, 1, self.num_iterations))
-        probs = unnormalized_probs / np.sum(unnormalized_probs)
-        shares = util.oric(probs * total_queries)
-        schedule = [initial_queries] + shares.tolist()
+        if self.num_iterations > 0:
+            initial_queries = int(self.initial_feedback_frac * total_queries)
+            total_queries -= initial_queries
+            # Compute the number of feedback queries to request at each iteration in advance.
+            vec_schedule = np.vectorize(self.query_schedule)
+            unnormalized_probs = vec_schedule(np.linspace(0, 1, self.num_iterations))
+            probs = unnormalized_probs / np.sum(unnormalized_probs)
+            shares = util.oric(probs * total_queries)
+            schedule = [initial_queries] + shares.tolist()
+            timesteps_per_iteration, extra_timesteps = divmod(total_timesteps, self.num_iterations)
+        else:
+            schedule = [total_queries]
+            timesteps_per_iteration, extra_timesteps = total_timesteps, 0
         print(f"Query schedule: {schedule}")
 
-        timesteps_per_iteration, extra_timesteps = divmod(total_timesteps, self.num_iterations)
         reward_loss = None
 
         for i, num_queries in enumerate(schedule):
