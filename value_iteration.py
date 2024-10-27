@@ -2,7 +2,7 @@ import numpy as np
 import tqdm
 from scipy import sparse
 
-from deterministic_mdp import DeterministicMDP
+from graph_mdp import GraphMDP
 
 
 def run_value_iteration(
@@ -95,7 +95,7 @@ def get_optimal_policy_and_values(env, gamma=0.99, horizon=None, alt_reward_fn=N
 
 
 class TabularPolicy:
-    def __init__(self, env: DeterministicMDP, policy_vector: np.ndarray):
+    def __init__(self, env, policy_vector: np.ndarray):
         self.env = env
         self.policy_vector = policy_vector
 
@@ -108,4 +108,14 @@ class RandomPolicy(TabularPolicy):
     def __init__(self, env, seed=None):
         if seed is not None:
             np.random.seed(seed)
-        super().__init__(env, np.random.randint(len(env.actions), size=len(env.states)))
+        if isinstance(env, GraphMDP):
+            policy_vector = []
+            for state in env.states:
+                available_actions = list(env.graph[state].keys())
+                available_action_indices = [env.get_action_index(action) for action in available_actions]
+                action_index = np.random.choice(available_action_indices)
+                policy_vector.append(action_index)
+            policy_vector = np.array(policy_vector)
+        else:
+            policy_vector = np.random.randint(len(env.actions), size=env.num_states)
+        super().__init__(env, policy_vector)
