@@ -1,10 +1,8 @@
 import itertools
-import pickle
 from typing import Iterable, Tuple
 
 import gymnasium as gym
 import numpy as np
-import tqdm
 from gymnasium import spaces
 from imitation.data.types import TrajectoryWithRew
 
@@ -469,6 +467,7 @@ class PartialGridVisibility(ObservationFunction):
         agent_visible = new_obs[:-1, 0].any(axis=(1, 2))
         new_rew = fragment.rews * agent_visible
 
+        # TODO: We should probably be returning a TrajectoryWithRewAndObs object here. Is this a bug?
         return TrajectoryWithRew(new_obs, fragment.acts, fragment.infos, fragment.terminal, new_rew)
 
 
