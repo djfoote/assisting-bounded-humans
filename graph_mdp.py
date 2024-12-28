@@ -1,3 +1,6 @@
+import collections
+from functools import cached_property
+
 import gymnasium as gym
 import numpy as np
 import torch as th
@@ -158,6 +161,77 @@ class GraphMDP(gym.Env):
             terminal=True,
             infos=None,
         )
+
+
+# TODO: This is only used for metrics currently. It should be cleaned up to subclass the MDP class and used throughout
+#       the partial observability codebase.
+class MDPWithObservations:
+    def __init__(self, mdp: GraphMDP, observation_fn: ObservationFunction, human_belief_fn: BeliefFunction):
+        self.mdp = mdp
+        self.observation_fn = observation_fn
+        self.human_belief_fn = human_belief_fn
+
+    @cached_property
+    def state_sequences(self):
+        trajectories = self.mdp.enumerate_trajectories()
+        return [tuple(traj.obs) for traj in trajectories]
+
+    @cached_property
+    def return_function_vector(self):
+        return np.array([traj.rews.sum() for traj in self.mdp.enumerate_trajectories()])
+
+    @cached_property
+    def obs_return_function_vector(self):
+        obs_return_function_list = []
+        for traj in self.mdp.enumerate_trajectories():
+            obs_seq = self.observation_fn(traj)
+            obs_return_function_list.append(self.human_belief_fn(obs_seq).expected_total_reward)
+        return np.array(obs_return_function_list)
+
+    # TODO: Code ported from another codebase with different conventions. Clean up.
+    def on_policy_distribution(self, policy):
+        partial_sequence_probs = {(0,): 1}
+        for _ in range(self.mdp.horizon):
+            new_partial_sequence_probs = collections.defaultdict(float)
+            for sequence, p_prefix in partial_sequence_probs.items():
+                prev_state_idx = sequence[-1]
+                action = self.mdp.actions[policy.predict(self.mdp.states[prev_state_idx])]
+                for next_state, p_next_state in self.mdp.graph[self.mdp.states[prev_state_idx]][action].items():
+                    p_sequence = p_prefix * p_next_state
+                    next_state_idx = self.mdp.get_state_index(next_state)
+                    if p_sequence > 0:
+                        new_partial_sequence_probs[sequence + (next_state_idx,)] += p_sequence
+            partial_sequence_probs = new_partial_sequence_probs
+
+        on_policy_distribution = np.zeros(len(self.state_sequences), dtype=float)
+        for i, sequence in enumerate(self.state_sequences):
+            on_policy_distribution[i] = partial_sequence_probs.get(sequence, 0)
+
+        return on_policy_distribution
+
+    def J(self, policy):
+        return self.on_policy_distribution(policy) @ self.return_function_vector
+
+    def J_obs(self, policy):
+        return self.on_policy_distribution(policy) @ self.obs_return_function_vector
+
+    def overestimation_error(self, policy):
+        overestimation_vector = np.fmax(self.obs_return_function_vector - self.return_function_vector, 0)
+        return self.on_policy_distribution(policy) @ overestimation_vector
+
+    def underestimation_error(self, policy):
+        underestimation_vector = np.fmax(self.return_function_vector - self.obs_return_function_vector, 0)
+        return self.on_policy_distribution(policy) @ underestimation_vector
+
+    def is_deceptive_inflation(self, policy, ref_policy):
+        overestimation_increased = self.overestimation_error(policy) > self.overestimation_error(ref_policy)
+        J_obs_increased = self.J_obs(policy) > self.J_obs(ref_policy)
+        return overestimation_increased and J_obs_increased
+
+    def is_overjustification(self, policy, ref_policy):
+        underestimation_decreased = self.underestimation_error(policy) < self.underestimation_error(ref_policy)
+        J_decreased = self.J(policy) < self.J(ref_policy)
+        return underestimation_decreased and J_decreased
 
 
 class GraphObservationFunction(ObservationFunction):

@@ -103,19 +103,22 @@ class TabularPolicy:
         state_index = self.env.get_state_index(state)
         return self.policy_vector[state_index]
 
+    def actions_per_state(self):
+        return {self.env.states[s_idx]: self.env.actions[a_idx] for s_idx, a_idx in enumerate(self.policy_vector)}
+
 
 class RandomPolicy(TabularPolicy):
-    def __init__(self, env, seed=None):
-        if seed is not None:
-            np.random.seed(seed)
+    def __init__(self, env, rng=None):
+        if rng is None:
+            rng = np.random.default_rng()
         if isinstance(env, GraphMDP):
             policy_vector = []
             for state in env.states:
                 available_actions = list(env.graph[state].keys())
                 available_action_indices = [env.get_action_index(action) for action in available_actions]
-                action_index = np.random.choice(available_action_indices)
+                action_index = rng.choice(available_action_indices)
                 policy_vector.append(action_index)
             policy_vector = np.array(policy_vector)
         else:
-            policy_vector = np.random.randint(len(env.actions), size=env.num_states)
+            policy_vector = rng.integers(len(env.actions), size=env.num_states)
         super().__init__(env, policy_vector)

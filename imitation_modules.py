@@ -86,7 +86,7 @@ class ExhaustiveTrajGenerator(DeterministicMDPTrajGenerator):
 
 class ExhaustiveFragmenter(preference_comparisons.RandomFragmenter):
     """
-    For small MDPs, enumerates all possible pairs of framgents.
+    For small MDPs, enumerates all possible pairs of fragments.
     """
 
     def __init__(self, rng, warning_threshold=0, custom_logger=None):
@@ -267,7 +267,7 @@ class RewardLearner(base.BaseImitationAlgorithm):
         custom_logger=None,
         query_schedule="hyperbolic",
         policy_evaluator=None,
-        callback=None,
+        callback=None,  # TODO: hackily allows a list of callbacks. Clean up.
     ):
         super().__init__(custom_logger=custom_logger, allow_variable_horizon=False)
 
@@ -368,13 +368,16 @@ class RewardLearner(base.BaseImitationAlgorithm):
             epoch_multiplier = self.initial_epoch_multiplier if i == 0 else 1.0
 
             start_time = time.time()
-            self.reward_trainer.train(self.dataset, epoch_multiplier=epoch_multiplier)
+            self.reward_trainer.train(
+                self.dataset,
+                epoch_multiplier=epoch_multiplier,
+            )
             self.logger.record("reward_model_train_time_elapsed", time.time() - start_time)
 
             base_key = self.logger.get_accumulate_prefixes() + "reward/final/train"
-            assert f"{base_key}/loss" in self.logger.name_to_value
-            reward_loss = self.logger.name_to_value[f"{base_key}/loss"]
-            self.logger.record("reward_loss", reward_loss)
+            # assert f"{base_key}/loss" in self.logger.name_to_value
+            # reward_loss = self.logger.name_to_value[f"{base_key}/loss"]
+            # self.logger.record("reward_loss", reward_loss)
 
             ###################
             # Train the agent #
@@ -407,7 +410,11 @@ class RewardLearner(base.BaseImitationAlgorithm):
             self.logger.dump(self._iteration)
 
             if self.callback is not None:
-                self.callback(self)
+                if isinstance(self.callback, list):
+                    for cb in self.callback:
+                        cb(self)
+                else:
+                    self.callback(self)
 
             self._iteration += 1
 

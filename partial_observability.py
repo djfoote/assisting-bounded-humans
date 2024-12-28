@@ -188,7 +188,7 @@ class PORLHFHumanFeedbackModel(SyntheticPreferenceHumanFeedbackModel):
             else:
                 preference = model_probs
             preferences.append(preference)
-        return np.array(preferences)
+        return np.array(preferences).astype(np.float32)
 
 
 class StatesSameAsObsHumanModelWrapper(HumanFeedbackModel):
